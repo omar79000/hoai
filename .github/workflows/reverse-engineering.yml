@@ -35,7 +35,7 @@ jobs:
       - name: Install inspection utilities
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools python3 ripgrep unzip zip coreutils
+          sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools mono-utils python3 ripgrep unzip zip coreutils
 
       - name: Inventory and extract archives without executing applications
         shell: bash
@@ -167,6 +167,28 @@ jobs:
           fi
           echo "Managed assembly and Access database inspection step finished; review per-file logs."
 
+      - name: Extract managed assembly metadata without bypassing protections
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/reports/metadata
+          if ! command -v monodis >/dev/null 2>&1; then
+            echo "monodis is unavailable; metadata-only inspection was skipped." >audit/reports/metadata/STATUS.txt
+          else
+            while IFS= read -r -d '' assembly; do
+              rel="${assembly#audit/extracted/}"
+              safe="$(printf '%s' "$rel" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')"
+              for mode in assembly typedef method fields property manifest; do
+                if timeout 60s monodis "--$mode" "$assembly" >"audit/reports/metadata/$safe.$mode.txt" 2>&1; then
+                  :
+                else
+                  rc=$?
+                  echo "monodis --$mode failed or timed out (exit $rc) for $rel" >>audit/reports/metadata/STATUS.txt
+                fi
+              done
+            done < <(find audit/extracted -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
+          fi
+
       - name: Build sanitized analysis artifact
         shell: bash
         run: |
@@ -192,7 +214,7 @@ jobs:
             if p.exists():
               out=dst/pathlib.Path(rel).name
               out.write_text(scrub(p.read_text(encoding="utf-8",errors="replace")),encoding="utf-8")
-          for folder in ["reports/database","decompiled"]:
+          for folder in ["reports/database","reports/metadata","decompiled"]:
             base=src/folder
             if not base.exists(): continue
             for p in base.rglob("*"):
