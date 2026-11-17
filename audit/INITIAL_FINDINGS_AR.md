@@ -212,3 +212,23 @@
 
 رابط التشغيل: https://github.com/omar79000/hoai/actions/runs/44193504954  
 رابط artifact: https://github.com/omar79000/hoai/actions/runs/44193504954
+
+
+## 11. مؤشرات إضافية من أسماء حقول DataSet داخل ملفي EXE
+
+تظهر في النسختين أسماء حقول برمجية متطابقة، منها:
+
+- مجموعة المبيعات: `columnname` و`columnuser` و`columnprice` و`columncurrency` و`columnselling_point` و`columncomment`.
+- مجموعة الاستخدام/الجلسات: `columnfirst_login_date` و`columntotal_download` و`columntotal_time`.
+- حقول/مؤشرات زمنية أخرى: `start_date` و`expiration_date` و`licensing_server_date` و`expired`.
+
+هذه أسماء مستخرجة من بيانات التعريف/السلاسل داخل الملفين التنفيذيين، وليست تعريفًا نهائيًا لجداول Access أو إثباتًا لكيفية احتساب القيم. لكنها تتوافق مع أقسام المبيعات والاستخدام والصلاحية التي يصفها دليل المستخدم.
+
+## 12. حالة التشغيل الخامس المؤكدة
+
+انتهى تشغيل GitHub Actions رقم `44193504954` بنجاح (`success`) بعد اكتمال خطوات استخراج الأرشيفين، جرد الملفات، محاولة التفكيك، استخراج مخططي MDB، تجهيز artifact المنقح ورفعه.
+
+- حجم artifact: 4,612,661 bytes.
+- SHA-256: `425a6fde6b0bf7509771233d5bc57a5abddc2c69b463cfd4d4666373bb6ed32f`.
+- انتهت جميع خطوات الوظيفة بحالة نجاح.
+- نجاح workflow يعني نجاح خط أنابيب الفحص والتجميع؛ ولا يعني نجاح تفكيك ملفي EXE الأساسيين، إذ يسجل `DECOMPILATION_NOTES.md` تعثر ILSpy فيهما.
