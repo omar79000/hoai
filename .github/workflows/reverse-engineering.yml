@@ -193,6 +193,21 @@ jobs:
             done < <(find audit/extracted -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
           fi
 
+      - name: Probe .NET metadata and method IL with dnfile and dncil
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check --no-input dnfile dncil
+          mkdir -p audit/reports/dotnet_probe
+          mapfile -d '' assemblies < <(find audit/extracted -type f -iname '*.exe' -print0)
+          if (("${#assemblies[@]}" == 0)); then
+            echo "No application EXE files found." > audit/reports/dotnet_probe/STATUS.md
+          else
+            .venv/bin/python tools/dotnet_static_probe.py --out audit/reports/dotnet_probe "${assemblies[@]}"
+          fi
+
       - name: Summarize executable indicators and metadata failures
         shell: bash
         run: |
@@ -263,7 +278,7 @@ jobs:
             if p.exists():
               out=dst/pathlib.Path(rel).name
               out.write_text(scrub(p.read_text(encoding="utf-8",errors="replace")),encoding="utf-8")
-          for folder in ["reports/database","reports/metadata","decompiled"]:
+          for folder in ["reports/database","reports/metadata","reports/dotnet_probe","decompiled"]:
             base=src/folder
             if not base.exists(): continue
             for p in base.rglob("*"):
