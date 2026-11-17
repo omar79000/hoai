@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: reverse-engineering-v2-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   static-audit:
