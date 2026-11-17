@@ -35,7 +35,7 @@ jobs:
       - name: Install inspection utilities
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends file binutils p7zip-full unar mdbtools python3 python3-pip ripgrep unzip zip
+          sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools python3 ripgrep unzip zip coreutils
 
       - name: Inventory and extract archives without executing applications
         shell: bash
@@ -51,21 +51,20 @@ jobs:
           if not archives:
               raise SystemExit("No RAR archives found at repository root.")
           for archive in archives:
-              if not archive.is_file(): continue
+              if not archive.is_file():
+                  continue
               digest = hashlib.sha256(archive.read_bytes()).hexdigest()
               out = root/"extracted"/archive.stem
               out.mkdir(parents=True, exist_ok=True)
               listing = subprocess.run(["7z","l","-slt",str(archive)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
               (root/"reports"/(archive.name+".listing.txt")).write_text(listing.stdout,encoding="utf-8",errors="replace")
               extract = subprocess.run(["7z","x","-y",f"-o{out}",str(archive)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-              method = "7z"
-              if extract.returncode != 0:
-                  extract = subprocess.run(["unar","-force-overwrite","-output-directory",str(out),str(archive)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-                  method = "unar"
               (root/"reports"/(archive.name+".extract.log")).write_text(extract.stdout,encoding="utf-8",errors="replace")
-              items.append({"archive":archive.name,"bytes":archive.stat().st_size,"sha256":digest,"listing_exit":listing.returncode,"extract_method":method,"extract_exit":extract.returncode,"extracted_to":str(out)})
-          (root/"reports"/"archives.json").write_text(json.dumps(items,indent=2),encoding="utf-8")
-          print(json.dumps(items,indent=2))
+              items.append({"archive":archive.name,"bytes":archive.stat().st_size,"sha256":digest,"listing_exit":listing.returncode,"extract_method":"7z","extract_exit":extract.returncode,"extracted_to":str(out)})
+              if listing.returncode != 0 or extract.returncode != 0:
+                  raise SystemExit(f"Archive processing failed: {archive.name}")
+          (root/"reports"/"archives.json").write_text(json.dumps(items,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps(items,indent=2,ensure_ascii=False))
           PY
 
       - name: Inspect extracted files and identify application technologies
@@ -93,10 +92,9 @@ jobs:
             extensions[ext]=extensions.get(ext,0)+1
             data=p.read_bytes()
             row={"path":rel,"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}
-            kind=subprocess.run(["file","-b",str(p)],text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL).stdout.strip()
-            row["file_type"]=kind
+            row["file_type"]=subprocess.run(["file","-b",str(p)],text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL).stdout.strip()
             files.append(row)
-            textual=ext in {".xml",".json",".config",".ini",".txt",".cs",".vb",".py",".js",".html",".sql",".java",".kt",".properties",".yaml",".yml",".md",".php",".php3",".bat",".ps1"}
+            textual=ext in {".xml",".json",".config",".ini",".txt",".cs",".vb",".py",".js",".html",".sql",".java",".kt",".properties",".yaml",".yml",".md",".php",".bat",".ps1"}
             if len(data)<=2_000_000 and (textual or b"\0" not in data[:8192]):
               text=data.decode("utf-8",errors="ignore")
               for label,pat in patterns.items():
@@ -123,7 +121,7 @@ jobs:
           md += ["## Important limitations","",
             "- This report is evidence from filenames, file signatures, and readable strings; it is not proof of runtime behavior.",
             "- Packed, encrypted, password-protected, or unsupported archives may not have extracted completely. Check each extract log and archive listing.",
-            "- Compiled applications may require format-specific decompilers and manual review. Native binaries may not yield original source code.",
+            "- Compiled applications may require format-specific decompilers and manual review. Original source code cannot be guaranteed to be recoverable.",
             "- RouterOS commands discovered in strings or source are candidates; call sites, arguments, sequencing, and error handling must be traced before changing anything.",
             "- Do not connect this analysis to a production MikroTik router or run extracted programs as part of static inspection."]
           (report/"STATIC_AUDIT.md").write_text("\n".join(md)+"\n",encoding="utf-8")
@@ -131,10 +129,10 @@ jobs:
           PY
           find audit/extracted -type f -print0 | xargs -0 -r file > audit/reports/file-signatures.txt
 
-      - name: Decompile managed applications and inspect Access databases
+      - name: Decompile managed assemblies and inspect Access schemas
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p audit/decompiled audit/reports/database audit/reports/strings
           TOOL_DIR="$HOME/.dotnet/tools"
           if dotnet tool install ilspycmd --tool-path "$TOOL_DIR" >audit/reports/ilspy-install.log 2>&1; then
@@ -142,19 +140,20 @@ jobs:
             while IFS= read -r -d '' assembly; do
               rel="${assembly#audit/extracted/}"
               safe="$(printf '%s' "$rel" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')"
-              echo "Decompiling: $rel"
+              echo "Inspecting managed assembly: $rel"
               mkdir -p "audit/decompiled/$safe"
-              "$ILSPY" -p -o "audit/decompiled/$safe" "$assembly" >"audit/reports/strings/$safe.ilspy.log" 2>&1
-              rc=$?
-              if [ "$rc" -ne 0 ]; then
-                echo "ILSpy failed (exit $rc) for $rel; see its log." >>audit/reports/DECOMPILATION_NOTES.md
-                "$ILSPY" "$assembly" >"audit/reports/strings/$safe.decompile.txt" 2>>"audit/reports/strings/$safe.ilspy.log" || true
+              if timeout 120s "$ILSPY" -p -o "audit/decompiled/$safe" "$assembly" >"audit/reports/strings/$safe.ilspy.log" 2>&1; then
+                echo "Project decompilation succeeded: $rel" >>audit/reports/DECOMPILATION_NOTES.md
+              else
+                rc=$?
+                echo "Project decompilation failed (exit $rc) for $rel; no protection bypass attempted." >>audit/reports/DECOMPILATION_NOTES.md
+                timeout 60s "$ILSPY" "$assembly" >"audit/reports/strings/$safe.decompile.txt" 2>>"audit/reports/strings/$safe.ilspy.log" || true
               fi
               strings -a -n 4 "$assembly" >"audit/reports/strings/$safe.ascii.txt" 2>/dev/null || true
               strings -el -n 4 "$assembly" >"audit/reports/strings/$safe.utf16.txt" 2>/dev/null || true
             done < <(find audit/extracted -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
           else
-            echo "ILSpy installation failed; see ilspy-install.log. Continuing with strings and database analysis." >>audit/reports/DECOMPILATION_NOTES.md
+            echo "ILSpy installation failed; see ilspy-install.log." >>audit/reports/DECOMPILATION_NOTES.md
           fi
           if command -v mdb-tables >/dev/null 2>&1; then
             while IFS= read -r -d '' db; do
@@ -166,12 +165,56 @@ jobs:
           else
             echo "mdbtools unavailable; Access schemas were not extracted." >>audit/reports/DECOMPILATION_NOTES.md
           fi
-          echo "Managed assembly and Access database inspection step completed; consult per-file logs for unsupported or obfuscated binaries."
+          echo "Managed assembly and Access database inspection step finished; review per-file logs."
 
-      - name: Publish complete audit bundle
+      - name: Build sanitized analysis artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, shutil
+          src=pathlib.Path("audit")
+          dst=src/"public-artifact"
+          dst.mkdir(parents=True,exist_ok=True)
+          selected=["reports/STATIC_AUDIT.md","reports/archives.json","reports/file_inventory.json",
+                    "reports/extension_counts.json","reports/pattern_hits.json","reports/DECOMPILATION_NOTES.md"]
+          secret_patterns=[
+            re.compile(r'(?i)(password|passwd|token|secret|api[_-]?key)(\s*[:=]\s*)(["\x27])([^"\x27\r\n]+)(["\x27])'),
+            re.compile(r'(?i)(https?://)([^/@:\s]+):([^/@\s]+)@'),
+            re.compile(r'\b\d{6,}:[A-Za-z0-9_-]{25,}\b')
+          ]
+          def scrub(s):
+            s=secret_patterns[0].sub(lambda m:m.group(1)+m.group(2)+m.group(3)+"[REDACTED]"+m.group(5),s)
+            s=secret_patterns[1].sub(r'\1[REDACTED]@',s)
+            return secret_patterns[2].sub("[REDACTED_BOT_TOKEN]",s)
+          for rel in selected:
+            p=src/rel
+            if p.exists():
+              out=dst/pathlib.Path(rel).name
+              out.write_text(scrub(p.read_text(encoding="utf-8",errors="replace")),encoding="utf-8")
+          for folder in ["reports/database","decompiled"]:
+            base=src/folder
+            if not base.exists(): continue
+            for p in base.rglob("*"):
+              if not p.is_file(): continue
+              if p.suffix.lower() not in {".sql",".txt",".cs",".vb",".json",".md",".log"}: continue
+              try:
+                text=p.read_text(encoding="utf-8",errors="replace")
+              except Exception:
+                continue
+              rel=p.relative_to(src)
+              out=dst/rel
+              out.parent.mkdir(parents=True,exist_ok=True)
+              out.write_text(scrub(text),encoding="utf-8")
+          (dst/"ARTIFACT_SCOPE.txt").write_text(
+            "Sanitized static-analysis outputs only. Original archives, executable files, DLLs, Access database contents, PDFs, images, and raw binary strings are intentionally excluded.\n"
+            "No executable was run and no production MikroTik router was contacted.\n",encoding="utf-8")
+          PY
+
+      - name: Publish sanitized audit bundle
         uses: actions/upload-artifact@v4
         with:
           name: hoai-static-reverse-engineering-audit
-          path: audit/
+          path: audit/public-artifact/
           if-no-files-found: error
           retention-days: 30
