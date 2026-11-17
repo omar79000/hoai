@@ -42,3 +42,8 @@ After the archive inventory identifies each application's actual technology and 
 - A safe modification plan with regression tests for existing behavior.
 
 No production application code has been changed in this initial audit commit.
+
+
+## Verified initial findings
+
+An Arabic findings report is available at [`audit/INITIAL_FINDINGS_AR.md`](audit/INITIAL_FINDINGS_AR.md). It records the evidence from the extracted packages and the user manual, compares the two versions, and explicitly separates confirmed facts from unresolved items. It does not claim that RouterOS commands or the full application source have been recovered.
