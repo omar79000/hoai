@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           timeout 600s sudo apt-get update -o Acquire::Retries=3
-          timeout 900s sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools mono-utils python3 ripgrep unzip zip coreutils
+          timeout 900s sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools mono-utils poppler-utils python3 ripgrep unzip zip coreutils
 
       - name: Inventory and extract archives without executing applications
         shell: bash
@@ -171,6 +171,24 @@ jobs:
           fi
           echo "Managed assembly and Access database inspection step finished; review per-file logs."
 
+      - name: Extract searchable text from bundled PDF manuals
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/reports/manuals
+          while IFS= read -r -d '' pdf; do
+            rel="${pdf#audit/extracted/}"
+            safe="$(printf '%s' "$rel" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')"
+            if pdftotext -layout "$pdf" "audit/reports/manuals/$safe.txt" 2>"audit/reports/manuals/$safe.err"; then
+              echo "Extracted PDF text: $rel"
+            else
+              echo "PDF text extraction failed: $rel" >>audit/reports/manuals/STATUS.txt
+            fi
+          done < <(find audit/extracted -type f -iname '*.pdf' -print0)
+          if ! find audit/reports/manuals -type f -name '*.txt' -print -quit | grep -q .; then
+            echo "No searchable PDF text was extracted." >audit/reports/manuals/STATUS.txt
+          fi
+
       - name: Extract managed assembly metadata without bypassing protections
         shell: bash
         run: |
@@ -263,7 +281,7 @@ jobs:
           dst=src/"public-artifact"
           dst.mkdir(parents=True,exist_ok=True)
           selected=["reports/STATIC_AUDIT.md","reports/archives.json","reports/file_inventory.json",
-                    "reports/extension_counts.json","reports/pattern_hits.json","reports/DECOMPILATION_NOTES.md","reports/APPLICATION_INDICATORS.md","reports/metadata/STATUS.txt"]
+                    "reports/extension_counts.json","reports/pattern_hits.json","reports/DECOMPILATION_NOTES.md","reports/APPLICATION_INDICATORS.md","reports/metadata/STATUS.txt","reports/manuals/STATUS.txt"]
           secret_patterns=[
             re.compile(r'(?i)(password|passwd|token|secret|api[_-]?key)(\s*[:=]\s*)(["\x27])([^"\x27\r\n]+)(["\x27])'),
             re.compile(r'(?i)(https?://)([^/@:\s]+):([^/@\s]+)@'),
@@ -278,7 +296,7 @@ jobs:
             if p.exists():
               out=dst/pathlib.Path(rel).name
               out.write_text(scrub(p.read_text(encoding="utf-8",errors="replace")),encoding="utf-8")
-          for folder in ["reports/database","reports/metadata","reports/dotnet_probe","decompiled"]:
+          for folder in ["reports/database","reports/metadata","reports/dotnet_probe","reports/manuals","decompiled"]:
             base=src/folder
             if not base.exists(): continue
             for p in base.rglob("*"):
