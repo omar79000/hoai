@@ -208,7 +208,7 @@ jobs:
             ("Authentication / settings",r"(?i)username|password|passwd|credential|authentication|login|server.?address|ip.?address|port"),
             ("Sales / cards / sessions",r"(?i)Selling.?points|tableSales|tableSessions|columnuser|columnprice|expiration_date|first_login|total_download|total_time|profile|session|voucher|ticket|card")
           ]
-          files=sorted(strings.glob("*HawaE*"))
+          files=sorted(p for p in strings.glob("*HawaE*") if p.name.endswith((".exe.ascii.txt",".exe.utf16.txt")))
           lines=["# Executable string indicators (static evidence only)","",
                  "These are readable strings extracted from the two EXE files. A string alone does not prove that code executes it or that it is a RouterOS command.",
                  "No credentials, raw databases, executable files, or DLL binaries are included here.",""]
