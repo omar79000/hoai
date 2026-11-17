@@ -43,7 +43,7 @@ try {
             if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string value) {
                 if (value.Length > 500 || Regex.IsMatch(value, @"(?i)(password|passwd|token|secret|api.?key)\s*[:=]")) continue;
                 if (routerCommand.IsMatch(value.Trim()) || safeLiteral.IsMatch(value.Trim())) {
-                    string safeValue = Regex.Replace(value.Replace("\r"," ").Replace("\n"," "), @"(?i)\b(password|passwd|secret|token|community|passphrase)\s*=\s*("[^"]*"|'[^']*'|\S+)", "$1=[REDACTED]");
+                    string safeValue = Regex.Replace(value.Replace("\r"," ").Replace("\n"," "), @"(?i)\b(password|passwd|secret|token|community|passphrase)\s*=\s*(""[^""]*""|\S+)", "$1=[REDACTED]");
                     literals.Add(method.FullName + " :: " + safeValue);
                 }
             }
