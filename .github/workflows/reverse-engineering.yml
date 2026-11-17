@@ -232,6 +232,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p audit/reports/dnlib_probe audit/reports/pe_deep
+          echo "dnlib evidence output filters arbitrary literals and redacts credential-like command parameters."
           mapfile -d '' assemblies < <(find audit/extracted -type f -iname '*.exe' -print0)
           for assembly in "${assemblies[@]}"; do
             echo "Independent dnlib parse: $assembly"
