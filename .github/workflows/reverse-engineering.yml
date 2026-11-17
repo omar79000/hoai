@@ -1,0 +1,135 @@
+name: Reverse Engineering - Static Audit
+
+on:
+  push:
+    branches:
+      - reverse-engineering/initial-audit
+    paths:
+      - "*.rar"
+      - ".github/workflows/reverse-engineering.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reverse-engineering-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  static-audit:
+    name: Extract and inspect application packages safely
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout uploaded archives
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install inspection utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file binutils p7zip-full unar python3 python3-pip ripgrep unzip zip
+
+      - name: Inventory and extract archives without executing applications
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/input audit/extracted audit/reports
+          find . -maxdepth 1 -type f -iname '*.rar' -print0 | while IFS= read -r -d '' f; do cp -- "$f" audit/input/; done
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          root = pathlib.Path("audit")
+          items = []
+          archives = sorted((root/"input").iterdir())
+          if not archives:
+              raise SystemExit("No RAR archives found at repository root.")
+          for archive in archives:
+              if not archive.is_file(): continue
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              out = root/"extracted"/archive.stem
+              out.mkdir(parents=True, exist_ok=True)
+              listing = subprocess.run(["7z","l","-slt",str(archive)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+              (root/"reports"/(archive.name+".listing.txt")).write_text(listing.stdout,encoding="utf-8",errors="replace")
+              extract = subprocess.run(["7z","x","-y",f"-o{out}",str(archive)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+              method = "7z"
+              if extract.returncode != 0:
+                  extract = subprocess.run(["unar","-force-overwrite","-output-directory",str(out),str(archive)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+                  method = "unar"
+              (root/"reports"/(archive.name+".extract.log")).write_text(extract.stdout,encoding="utf-8",errors="replace")
+              items.append({"archive":archive.name,"bytes":archive.stat().st_size,"sha256":digest,"listing_exit":listing.returncode,"extract_method":method,"extract_exit":extract.returncode,"extracted_to":str(out)})
+          (root/"reports"/"archives.json").write_text(json.dumps(items,indent=2),encoding="utf-8")
+          print(json.dumps(items,indent=2))
+          PY
+
+      - name: Inspect extracted files and identify application technologies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, pathlib, re, subprocess
+          base=pathlib.Path("audit/extracted")
+          report=pathlib.Path("audit/reports")
+          extensions={}
+          files=[]
+          patterns={
+            "RouterOS and MikroTik API":r"(?i)(/ip\s+(hotspot|pool|address|dhcp|firewall)|/user\s+(add|set|remove|print)|/tool\s+user-manager|/queue\s+(simple|tree)|/system\s+(identity|resource)|\.api|8728|8729|routeros|mikrotik)",
+            "Database and SQL":r"(?i)(sqlite|mysql|mariadb|sqlserver|oledb|\.mdb|\.accdb|create\s+table|select\s+.+\s+from)",
+            "Printing and card generation":r"(?i)(zebra|escpos|crystal.?reports|reportviewer|printdocument|printer|barcode|qrcode|pdf|ticket|card)",
+            "Sales and reporting":r"(?i)(sales|revenue|profit|invoice|receipt|report|export|excel|xlsx|csv|بيع|مبيعات|تقرير|ارباح|فاتورة)",
+            "Credentials and networking":r"(?i)(password|passwd|username|credential|login|socket|tcpclient|webrequest|httpclient|ssh|winbox)"
+          }
+          hits={k:[] for k in patterns}
+          for p in sorted(base.rglob("*")):
+            if not p.is_file(): continue
+            rel=str(p.relative_to(base))
+            ext=p.suffix.lower() or "[no extension]"
+            extensions[ext]=extensions.get(ext,0)+1
+            data=p.read_bytes()
+            row={"path":rel,"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}
+            kind=subprocess.run(["file","-b",str(p)],text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL).stdout.strip()
+            row["file_type"]=kind
+            files.append(row)
+            textual=ext in {".xml",".json",".config",".ini",".txt",".cs",".vb",".py",".js",".html",".sql",".java",".kt",".properties",".yaml",".yml",".md",".php",".php3",".bat",".ps1"}
+            if len(data)<=2_000_000 and (textual or b"\0" not in data[:8192]):
+              text=data.decode("utf-8",errors="ignore")
+              for label,pat in patterns.items():
+                for m in list(re.finditer(pat,text))[:30]:
+                  snippet=text[max(0,m.start()-100):min(len(text),m.end()+180)].replace("\r"," ").replace("\n"," ")
+                  hits[label].append({"file":rel,"match":m.group(0)[:100],"context":snippet[:400]})
+          (report/"file_inventory.json").write_text(json.dumps(files,indent=2,ensure_ascii=False),encoding="utf-8")
+          (report/"extension_counts.json").write_text(json.dumps(extensions,indent=2,ensure_ascii=False),encoding="utf-8")
+          (report/"pattern_hits.json").write_text(json.dumps(hits,indent=2,ensure_ascii=False),encoding="utf-8")
+          md=["# Static reverse-engineering audit","",
+              "> Static inspection only. No application executable, installer, script, or macro was launched.","",
+              "## Archive extraction",""]
+          for a in json.loads((report/"archives.json").read_text()):
+            md += [f"- **{a['archive']}** — {a['bytes']:,} bytes; SHA-256 {a['sha256']}; extraction via {a['extract_method']} (exit {a['extract_exit']})."]
+          md += ["","## File inventory summary","",f"- Total extracted files: **{len(files)}**",""]
+          md += [f"- {k}: {v}" for k,v in sorted(extensions.items(),key=lambda x:(-x[1],x[0]))]
+          md += ["","## Technology and function indicators",""]
+          for label,entries in hits.items():
+            md += [f"### {label} ({len(entries)} matches)",""]
+            for h in entries[:100]:
+              md += [f"- {h['file']} — {h['match']}: {h['context']}"]
+            if not entries: md += ["- No matching text indicators found."]
+            md += [""]
+          md += ["## Important limitations","",
+            "- This report is evidence from filenames, file signatures, and readable strings; it is not proof of runtime behavior.",
+            "- Packed, encrypted, password-protected, or unsupported archives may not have extracted completely. Check each extract log and archive listing.",
+            "- Compiled applications may require format-specific decompilers and manual review. Native binaries may not yield original source code.",
+            "- RouterOS commands discovered in strings or source are candidates; call sites, arguments, sequencing, and error handling must be traced before changing anything.",
+            "- Do not connect this analysis to a production MikroTik router or run extracted programs as part of static inspection."]
+          (report/"STATIC_AUDIT.md").write_text("\n".join(md)+"\n",encoding="utf-8")
+          print(f"Inspected {len(files)} files; extensions: {extensions}")
+          PY
+          find audit/extracted -type f -print0 | xargs -0 -r file > audit/reports/file-signatures.txt
+
+      - name: Publish complete audit bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hoai-static-reverse-engineering-audit
+          path: audit/
+          if-no-files-found: error
+          retention-days: 30
