@@ -203,7 +203,7 @@ jobs:
           strings=root/"strings"
           out=root/"APPLICATION_INDICATORS.md"
           patterns=[
-            ("RouterOS / MikroTik",r"(?i)routeros|mikrotik|user.?manager|hotspot|radius|winbox|/ip(?:/|\\s)|/tool(?:/|\\s)|8728|8729"),
+            ("RouterOS / MikroTik",r"(?i)routeros|mikrotik|user.?manager|hotspot|radius|winbox|/ip(?:/|\s)|/tool(?:/|\s)|8728|8729"),
             ("Network / transport",r"(?i)TcpClient|TcpListener|NetworkStream|Socket|WebRequest|HttpWebRequest|HttpWebResponse|HttpClient|WebClient|SslStream|ConnectAsync|GetResponse|SendAsync|Receive"),
             ("Authentication / settings",r"(?i)username|password|passwd|credential|authentication|login|server.?address|ip.?address|port"),
             ("Sales / cards / sessions",r"(?i)Selling.?points|tableSales|tableSessions|columnuser|columnprice|expiration_date|first_login|total_download|total_time|profile|session|voucher|ticket|card")
@@ -221,11 +221,11 @@ jobs:
               for raw in content.splitlines():
                 s=raw.strip()
                 if len(s)<3 or len(s)>500 or not re.search(pat,s): continue
-                if re.search(r"(?i)(password|passwd|token|secret|api.?key)\\s*[:=]",s):
-                  s=re.sub(r"(?i)((?:password|passwd|token|secret|api.?key)\\s*[:=]\\s*)\\S+",r"\\1[REDACTED]",s)
-                s=re.sub(r"\\b\\d{6,}:[A-Za-z0-9_-]{25,}\\b","[REDACTED_BOT_TOKEN]",s)
+                if re.search(r"(?i)(password|passwd|token|secret|api.?key)\s*[:=]",s):
+                  s=re.sub(r"(?i)((?:password|passwd|token|secret|api.?key)\s*[:=]\s*)\\S+",r"\1[REDACTED]",s)
+                s=re.sub(r"\b\\d{6,}:[A-Za-z0-9_-]{25,}\b","[REDACTED_BOT_TOKEN]",s)
                 if re.search(r"(?i)https?://[^/@: ]+:[^/@ ]+@",s):
-                  s=re.sub(r"(https?://)[^/@: ]+:[^/@ ]+@",r"\\1[REDACTED]@",s)
+                  s=re.sub(r"(https?://)[^/@: ]+:[^/@ ]+@",r"\1[REDACTED]@",s)
                 found.append(f"- `{p.name}`: `{s[:300]}`")
             lines += (found[:120] if found else ["- No readable matches found."]) + [""]
           status=root/"metadata"/"STATUS.txt"
@@ -234,7 +234,7 @@ jobs:
             lines += ["```text",status.read_text(encoding="utf-8",errors="replace")[:12000],"```",""]
           else:
             lines += ["- No metadata status file was produced.",""]
-          out.write_text("\\n".join(lines),encoding="utf-8")
+          out.write_text("\n".join(lines),encoding="utf-8")
           print(f"Wrote {out}")
           PY
 
