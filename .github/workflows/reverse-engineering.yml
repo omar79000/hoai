@@ -27,10 +27,15 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up .NET SDK for managed assembly analysis
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Install inspection utilities
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends file binutils p7zip-full unar python3 python3-pip ripgrep unzip zip
+          sudo apt-get install -y --no-install-recommends file binutils p7zip-full unar mdbtools python3 python3-pip ripgrep unzip zip
 
       - name: Inventory and extract archives without executing applications
         shell: bash
@@ -125,6 +130,33 @@ jobs:
           print(f"Inspected {len(files)} files; extensions: {extensions}")
           PY
           find audit/extracted -type f -print0 | xargs -0 -r file > audit/reports/file-signatures.txt
+
+      - name: Decompile managed applications and inspect Access databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/decompiled audit/reports/database audit/reports/strings
+          dotnet tool install ilspycmd --tool-path "$HOME/.dotnet/tools"
+          ILSPY="$HOME/.dotnet/tools/ilspycmd"
+          find audit/extracted -type f \\( -iname '*.exe' -o -iname '*.dll' \\) -print0 | while IFS= read -r -d '' assembly; do
+            rel="${assembly#audit/extracted/}"
+            safe="$(printf '%s' "$rel" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')"
+            echo "Decompiling: $rel"
+            "$ILSPY" -p -o "audit/decompiled/$safe" "$assembly" >"audit/reports/strings/$safe.ilspy.log" 2>&1 || echo "ILSpy returned non-zero for $rel; inspect log." >>"audit/reports/DECOMPILATION_NOTES.md"
+            strings -a -n 4 "$assembly" >"audit/reports/strings/$safe.ascii.txt" || true
+            strings -el -n 4 "$assembly" >"audit/reports/strings/$safe.utf16.txt" || true
+          done
+          find audit/extracted -type f -iname '*.mdb' -print0 | while IFS= read -r -d '' db; do
+            rel="${db#audit/extracted/}"
+            safe="$(printf '%s' "$rel" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')"
+            mdb-tables -1 "$db" >"audit/reports/database/$safe.tables.txt" 2>"audit/reports/database/$safe.tables.err" || true
+            : >"audit/reports/database/$safe.schema.sql"
+            while IFS= read -r table; do
+              [ -n "$table" ] || continue
+              mdb-schema "$db" "$table" >>"audit/reports/database/$safe.schema.sql" 2>>"audit/reports/database/$safe.schema.err" || true
+            done <"audit/reports/database/$safe.tables.txt"
+          done
+          echo "Managed assembly decompilation and Access schema extraction completed; review logs for obfuscation or unsupported metadata."
 
       - name: Publish complete audit bundle
         uses: actions/upload-artifact@v4
