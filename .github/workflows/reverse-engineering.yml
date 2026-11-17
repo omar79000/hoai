@@ -222,8 +222,8 @@ jobs:
                 s=raw.strip()
                 if len(s)<3 or len(s)>500 or not re.search(pat,s): continue
                 if re.search(r"(?i)(password|passwd|token|secret|api.?key)\s*[:=]",s):
-                  s=re.sub(r"(?i)((?:password|passwd|token|secret|api.?key)\s*[:=]\s*)\\S+",r"\1[REDACTED]",s)
-                s=re.sub(r"\b\\d{6,}:[A-Za-z0-9_-]{25,}\b","[REDACTED_BOT_TOKEN]",s)
+                  s=re.sub(r"(?i)((?:password|passwd|token|secret|api.?key)\s*[:=]\s*)\S+",r"\1[REDACTED]",s)
+                s=re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{25,}\b","[REDACTED_BOT_TOKEN]",s)
                 if re.search(r"(?i)https?://[^/@: ]+:[^/@ ]+@",s):
                   s=re.sub(r"(https?://)[^/@: ]+:[^/@ ]+@",r"\1[REDACTED]@",s)
                 found.append(f"- `{p.name}`: `{s[:300]}`")
