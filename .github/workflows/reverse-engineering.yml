@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: reverse-engineering-${{ github.ref }}
+  group: reverse-engineering-v2-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -33,9 +33,13 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Install inspection utilities
+        timeout-minutes: 18
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools mono-utils python3 ripgrep unzip zip coreutils
+          set -euo pipefail
+          timeout 600s sudo apt-get update -o Acquire::Retries=3
+          timeout 900s sudo apt-get install -y --no-install-recommends file binutils p7zip-full mdbtools mono-utils python3 ripgrep unzip zip coreutils
 
       - name: Inventory and extract archives without executing applications
         shell: bash
