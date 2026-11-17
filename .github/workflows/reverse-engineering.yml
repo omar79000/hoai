@@ -217,13 +217,33 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv .venv
-          .venv/bin/python -m pip install --disable-pip-version-check --no-input dnfile dncil
+          .venv/bin/python -m pip install --disable-pip-version-check --no-input dnfile dncil pefile
           mkdir -p audit/reports/dotnet_probe
           mapfile -d '' assemblies < <(find audit/extracted -type f -iname '*.exe' -print0)
           if (("${#assemblies[@]}" == 0)); then
             echo "No application EXE files found." > audit/reports/dotnet_probe/STATUS.md
           else
             .venv/bin/python tools/dotnet_static_probe.py --out audit/reports/dotnet_probe "${assemblies[@]}"
+          fi
+
+      - name: Retry managed metadata parsing with dnlib and map call targets
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          mkdir -p audit/reports/dnlib_probe audit/reports/pe_deep
+          mapfile -d '' assemblies < <(find audit/extracted -type f -iname '*.exe' -print0)
+          for assembly in "${assemblies[@]}"; do
+            echo "Independent dnlib parse: $assembly"
+            timeout 240s dotnet run --project tools/dnlib_probe/dnlib_probe.csproj --configuration Release -- "$assembly" audit/reports/dnlib_probe || {
+              rc=$?
+              echo "dnlib probe process failed (exit $rc) for $assembly" >>audit/reports/dnlib_probe/STATUS.txt
+            }
+          done
+          if (("${#assemblies[@]}" > 0)); then
+            .venv/bin/python tools/pe_deep_probe.py --out audit/reports/pe_deep "${assemblies[@]}"
+          else
+            echo "No EXE files available for PE inspection." >audit/reports/pe_deep/STATUS.txt
           fi
 
       - name: Summarize executable indicators and metadata failures
@@ -296,7 +316,7 @@ jobs:
             if p.exists():
               out=dst/pathlib.Path(rel).name
               out.write_text(scrub(p.read_text(encoding="utf-8",errors="replace")),encoding="utf-8")
-          for folder in ["reports/database","reports/metadata","reports/dotnet_probe","reports/manuals","decompiled"]:
+          for folder in ["reports/database","reports/metadata","reports/dotnet_probe","reports/manuals","reports/dnlib_probe","reports/pe_deep","decompiled"]:
             base=src/folder
             if not base.exists(): continue
             for p in base.rglob("*"):
