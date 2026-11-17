@@ -112,8 +112,19 @@ def analyze(path, outdir):
                     if KEYWORDS.search(combined): result["methods"].append(entry)
                 except Exception as exc:
                     result["errors"].append(f"Method RID {rid} {typ}::{name}: {type(exc).__name__}: {safe(exc)}")
-        result["status"]="parsed"
         result["warnings"]=[safe(w) for w in pe.get_warnings()] if hasattr(pe,"get_warnings") else []
+        core_tables = ("TypeDef", "MethodDef", "MemberRef")
+        core_readable = any(result["tables"].get(name, 0) > 0 for name in core_tables)
+        unreadable_markers = ("Unable to read .NET metadata tables", "Unable to parse stream")
+        warning_text = " ".join(result["warnings"])
+        if not core_readable and any(marker in warning_text for marker in unreadable_markers):
+            result["status"] = "unreadable_metadata"
+            result["errors"].append("dnfile recognized a CLR directory but could not parse the metadata streams/tables; zero table counts are NOT a successful parse.")
+        elif not core_readable:
+            result["status"] = "inconclusive"
+            result["errors"].append("No core CLR type/method/member tables were available; method-level analysis cannot be claimed.")
+        else:
+            result["status"] = "parsed"
     except Exception as exc:
         result["status"]="failed"; result["errors"].append(f"{type(exc).__name__}: {safe(exc)}")
     outdir.mkdir(parents=True,exist_ok=True)
@@ -130,7 +141,8 @@ def analyze(path, outdir):
         if m["calls"]: lines += ["Calls: "+"; ".join(f"{tick}{safe(x)}{tick}" for x in m["calls"][:80]),""]
         if m["strings"]: lines += ["String literals: "+"; ".join(f"{tick}{safe(x)}{tick}" for x in m["strings"][:80]),""]
         lines += [f"- IL: {tick}{safe(x)}{tick}" for x in m["il"][:160]]+[""]
-    lines += ["## Parse errors / limitations",""]+[f"- {safe(x)}" for x in result["errors"][:300]]
+    lines += ["## Warnings",""]+[f"- {safe(x)}" for x in result.get("warnings",[])[:300]]
+    lines += ["","## Parse errors / limitations",""]+[f"- {safe(x)}" for x in result["errors"][:300]]
     lines += ["","> Static metadata/IL parsing only. No target code is executed. Evidence still requires call-flow review."]
     (outdir/(stem+".dotnet-probe.md")).write_text("\n".join(lines)+"\n",encoding="utf-8")
     print(f"{path.name}: {result['status']}; types={len(result['types'])}; member_refs={len(result['member_refs'])}; relevant_methods={len(result['methods'])}; errors={len(result['errors'])}")
