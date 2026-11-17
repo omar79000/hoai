@@ -193,6 +193,51 @@ jobs:
             done < <(find audit/extracted -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
           fi
 
+      - name: Summarize executable indicators and metadata failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re
+          root=pathlib.Path("audit/reports")
+          strings=root/"strings"
+          out=root/"APPLICATION_INDICATORS.md"
+          patterns=[
+            ("RouterOS / MikroTik",r"(?i)routeros|mikrotik|user.?manager|hotspot|radius|winbox|/ip(?:/|\\s)|/tool(?:/|\\s)|8728|8729"),
+            ("Network / transport",r"(?i)TcpClient|TcpListener|NetworkStream|Socket|WebRequest|HttpWebRequest|HttpWebResponse|HttpClient|WebClient|SslStream|ConnectAsync|GetResponse|SendAsync|Receive"),
+            ("Authentication / settings",r"(?i)username|password|passwd|credential|authentication|login|server.?address|ip.?address|port"),
+            ("Sales / cards / sessions",r"(?i)Selling.?points|tableSales|tableSessions|columnuser|columnprice|expiration_date|first_login|total_download|total_time|profile|session|voucher|ticket|card")
+          ]
+          files=sorted(strings.glob("*HawaE*"))
+          lines=["# Executable string indicators (static evidence only)","",
+                 "These are readable strings extracted from the two EXE files. A string alone does not prove that code executes it or that it is a RouterOS command.",
+                 "No credentials, raw databases, executable files, or DLL binaries are included here.",""]
+          for label,pat in patterns:
+            lines += [f"## {label}",""]
+            found=[]
+            for p in files:
+              try: content=p.read_text(encoding="utf-8",errors="replace")
+              except Exception: continue
+              for raw in content.splitlines():
+                s=raw.strip()
+                if len(s)<3 or len(s)>500 or not re.search(pat,s): continue
+                if re.search(r"(?i)(password|passwd|token|secret|api.?key)\\s*[:=]",s):
+                  s=re.sub(r"(?i)((?:password|passwd|token|secret|api.?key)\\s*[:=]\\s*)\\S+",r"\\1[REDACTED]",s)
+                s=re.sub(r"\\b\\d{6,}:[A-Za-z0-9_-]{25,}\\b","[REDACTED_BOT_TOKEN]",s)
+                if re.search(r"(?i)https?://[^/@: ]+:[^/@ ]+@",s):
+                  s=re.sub(r"(https?://)[^/@: ]+:[^/@ ]+@",r"\\1[REDACTED]@",s)
+                found.append(f"- `{p.name}`: `{s[:300]}`")
+            lines += (found[:120] if found else ["- No readable matches found."]) + [""]
+          status=root/"metadata"/"STATUS.txt"
+          lines += ["## Metadata extraction status",""]
+          if status.exists():
+            lines += ["```text",status.read_text(encoding="utf-8",errors="replace")[:12000],"```",""]
+          else:
+            lines += ["- No metadata status file was produced.",""]
+          out.write_text("\\n".join(lines),encoding="utf-8")
+          print(f"Wrote {out}")
+          PY
+
       - name: Build sanitized analysis artifact
         shell: bash
         run: |
@@ -203,7 +248,7 @@ jobs:
           dst=src/"public-artifact"
           dst.mkdir(parents=True,exist_ok=True)
           selected=["reports/STATIC_AUDIT.md","reports/archives.json","reports/file_inventory.json",
-                    "reports/extension_counts.json","reports/pattern_hits.json","reports/DECOMPILATION_NOTES.md"]
+                    "reports/extension_counts.json","reports/pattern_hits.json","reports/DECOMPILATION_NOTES.md","reports/APPLICATION_INDICATORS.md","reports/metadata/STATUS.txt"]
           secret_patterns=[
             re.compile(r'(?i)(password|passwd|token|secret|api[_-]?key)(\s*[:=]\s*)(["\x27])([^"\x27\r\n]+)(["\x27])'),
             re.compile(r'(?i)(https?://)([^/@:\s]+):([^/@\s]+)@'),
