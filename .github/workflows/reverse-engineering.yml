@@ -152,7 +152,7 @@ jobs:
               fi
               strings -a -n 4 "$assembly" >"audit/reports/strings/$safe.ascii.txt" 2>/dev/null || true
               strings -el -n 4 "$assembly" >"audit/reports/strings/$safe.utf16.txt" 2>/dev/null || true
-            done < <(find audit/extracted -type f \\( -iname '*.exe' -o -iname '*.dll' \\) -print0)
+            done < <(find audit/extracted -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
           else
             echo "ILSpy installation failed; see ilspy-install.log. Continuing with strings and database analysis." >>audit/reports/DECOMPILATION_NOTES.md
           fi
@@ -162,7 +162,7 @@ jobs:
               safe="$(printf '%s' "$rel" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')"
               mdb-tables -1 "$db" >"audit/reports/database/$safe.tables.txt" 2>"audit/reports/database/$safe.tables.err" || true
               mdb-schema "$db" access >"audit/reports/database/$safe.schema.sql" 2>"audit/reports/database/$safe.schema.err" || true
-            done < <(find audit/extracted -type f \\( -iname '*.mdb' -o -iname '*.accdb' \\) -print0)
+            done < <(find audit/extracted -type f \( -iname '*.mdb' -o -iname '*.accdb' \) -print0)
           else
             echo "mdbtools unavailable; Access schemas were not extracted." >>audit/reports/DECOMPILATION_NOTES.md
           fi
