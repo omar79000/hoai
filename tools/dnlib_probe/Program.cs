@@ -233,7 +233,11 @@ try {
     using (var tw = new StreamWriter(typePath, false, new UTF8Encoding(false))) {
         tw.WriteLine("EntryPoint: " + (module.EntryPoint?.FullName ?? "(none)"));
         foreach (var type in types.OrderBy(t => t.FullName, StringComparer.Ordinal)) {
-            tw.WriteLine("TYPE " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? "(none)") + " METHODS=" + type.Methods.Count);
+            bool hasDirectNetworkOrData = type.Methods.Any(m => m.HasBody && m.Body.Instructions.Any(ins =>
+                (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
+                && (directNetworkCall.IsMatch(ins.Operand?.ToString() ?? "") || directDataCall.IsMatch(ins.Operand?.ToString() ?? ""))));
+            tw.WriteLine("TYPE " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? "(none)") + " METHODS=" + type.Methods.Count
+                + " DIRECT_NETWORK_OR_DATA=" + hasDirectNetworkOrData);
             foreach (var method in type.Methods) {
                 bool hasBody = method.HasBody;
                 bool namedInteresting = Regex.IsMatch(method.Name.String, @"(?i)(InitializeComponent|Main|Click|Mouse|Double|Load|Shown|Closing|Activated|Form)");
