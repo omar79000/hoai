@@ -54,13 +54,8 @@ try {
     using (var rs = new StreamWriter(resourcesPath, false, new UTF8Encoding(false))) {
         foreach (var r in module.Resources) {
             rs.WriteLine(r.ResourceType + " " + r.Name);
-            if (r is EmbeddedResource er) {
-                try {
-                    using var stream = er.CreateReader().ToMemoryStream();
-                    byte[] bytes = stream.ToArray();
-                    rs.WriteLine("  bytes=" + bytes.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
-                } catch (Exception ex) { rs.WriteLine("  read-error=" + ex.GetType().Name + ": " + ex.Message); }
-            }
+            // Resource names/types are sufficient for this inventory. Avoid relying on
+            // version-specific DataReader conversion helpers for resource byte extraction.
         }
     }
     log.AppendLine("- Parse status: **parsed**");
