@@ -95,45 +95,53 @@ try {
             }
         }
     }
-    // Build reverse call chains from methods that directly touch network or database APIs.
-    var directTargets = new HashSet<string>();
+    // Build reverse call chains using resolved MethodDef metadata tokens, not obfuscated display names.
+    var directTargets = new HashSet<MethodDef>();
     foreach (var method in methods) {
         if (!method.HasBody) continue;
         bool direct = method.Body.Instructions.Any(ins =>
             (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
             && (directNetworkCall.IsMatch(ins.Operand?.ToString() ?? "") || directDataCall.IsMatch(ins.Operand?.ToString() ?? "")));
-        if (direct) directTargets.Add(method.FullName);
+        if (direct) directTargets.Add(method);
     }
     var callerLines = new SortedSet<string>();
     var callerIl = new StringBuilder();
-    var seen = new HashSet<string>(directTargets);
-    var frontier = new HashSet<string>(directTargets);
-    for (int depth = 1; depth <= 3 && frontier.Count > 0; depth++) {
-        var next = new HashSet<string>();
+    var seenTokens = new HashSet<uint>(directTargets.Select(m => m.MDToken.Raw));
+    var frontierTokens = new HashSet<uint>(seenTokens);
+    foreach (var target in directTargets)
+        callerLines.Add("DIRECT_API_METHOD TOKEN=" + target.MDToken.Raw.ToString("X8") + " " + target.FullName);
+    for (int depth = 1; depth <= 6 && frontierTokens.Count > 0; depth++) {
+        var nextMethods = new HashSet<MethodDef>();
         foreach (var method in methods) {
-            if (!method.HasBody || seen.Contains(method.FullName)) continue;
-            var matches = method.Body.Instructions
-                .Where(ins => ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn)
-                .Select(ins => ins.Operand is IMethod calledMethod ? calledMethod.ResolveMethodDef() : null)
-                .Where(target => target != null && frontier.Contains(target.FullName))
-                .Select(target => target!.FullName).Distinct().ToList();
+            if (!method.HasBody || seenTokens.Contains(method.MDToken.Raw)) continue;
+            var matches = new SortedSet<string>();
+            foreach (var ins in method.Body.Instructions) {
+                if (ins.OpCode != OpCodes.Call && ins.OpCode != OpCodes.Callvirt && ins.OpCode != OpCodes.Newobj
+                    && ins.OpCode != OpCodes.Ldftn && ins.OpCode != OpCodes.Ldvirtftn) continue;
+                if (ins.Operand is not IMethod methodRef) continue;
+                MethodDef? resolved = null;
+                try { resolved = methodRef.ResolveMethodDef(); } catch { }
+                if (resolved != null && frontierTokens.Contains(resolved.MDToken.Raw)) {
+                    matches.Add("TOKEN=" + resolved.MDToken.Raw.ToString("X8") + " " + resolved.FullName);
+                    nextMethods.Add(method);
+                }
+            }
             if (matches.Count == 0) continue;
-            callerLines.Add("DEPTH=" + depth + " " + method.FullName + " => " + String.Join(" || ", matches));
-            callerIl.AppendLine("\n## DEPTH=" + depth + " " + method.FullName);
+            callerLines.Add("DEPTH=" + depth + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName + " => " + String.Join(" || ", matches));
+            callerIl.AppendLine("\n## DEPTH=" + depth + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
             foreach (var ins in method.Body.Instructions) {
                 string operand = ins.Operand?.ToString() ?? "";
                 if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj
                     || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn) {
                     callerIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
-                    if (ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn)
-                        uiEvents.Add("LD_FTN " + method.FullName + " => " + operand);
-                    if (eventCall.IsMatch(operand))
-                        uiEvents.Add("EVENT_CALL " + method.FullName + " => " + operand);
                 } else if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string str) {
-                    if (routerCommand.IsMatch(str.Trim()) && str.Length <= 500
-                        && !Regex.IsMatch(str, @"(?i)(password|passwd|token|secret|api.?key)\s*[:=]"))
+                    bool sensitive = Regex.IsMatch(str, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\s*[:=]");
+                    if (routerCommand.IsMatch(str.Trim()) && str.Length <= 500 && !sensitive)
                         callerIl.AppendLine($"{ins.Offset:X4}: ldstr {str}");
-                    else callerIl.AppendLine($"{ins.Offset:X4}: ldstr [string omitted]");
+                    else if (sensitive)
+                        callerIl.AppendLine($"{ins.Offset:X4}: ldstr [REDACTED]");
+                    else
+                        callerIl.AppendLine($"{ins.Offset:X4}: ldstr [non-command string omitted]");
                 } else if (ins.OpCode.Name.StartsWith("ldc.i4", StringComparison.Ordinal)
                     || ins.OpCode.Name.StartsWith("ldc.i8", StringComparison.Ordinal)
                     || ins.OpCode.FlowControl == FlowControl.Branch
@@ -141,10 +149,9 @@ try {
                     callerIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
                 }
             }
-            next.Add(method.FullName);
         }
-        foreach (var n in next) seen.Add(n);
-        frontier = next;
+        foreach (var method in nextMethods) seenTokens.Add(method.MDToken.Raw);
+        frontierTokens = new HashSet<uint>(nextMethods.Select(m => m.MDToken.Raw));
     }
     var literalInventory = new SortedSet<string>();
     foreach (var method in methods) if (method.HasBody) foreach (var ins in method.Body.Instructions)
