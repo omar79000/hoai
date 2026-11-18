@@ -22,6 +22,7 @@ string callerIlPath = Path.Combine(output, stem + ".network-caller-il.txt");
 string typePath = Path.Combine(output, stem + ".type-inventory.txt");
 string formEventPath = Path.Combine(output, stem + ".form-event-candidates.txt");
 string formDelegatePath = Path.Combine(output, stem + ".form-delegate-map.txt");
+string literalInventoryPath = Path.Combine(output, stem + ".literal-inventory.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data\.OleDb|System\.Data\.Common\.DbCommand|System\.Data\.Common\.DbData|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions)");
 var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
@@ -103,6 +104,11 @@ try {
         if (direct) directTargets.Add(method.FullName);
     }
     var callerLines = new SortedSet<string>();
+    var directTargetTokens = new HashSet<uint>();
+    foreach (var method in methods) if (method.HasBody && method.Body.Instructions.Any(ins =>
+        (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
+        && (directNetworkCall.IsMatch(ins.Operand?.ToString() ?? "") || directDataCall.IsMatch(ins.Operand?.ToString() ?? ""))))
+        directTargetTokens.Add(method.MDToken.Raw);
     var callerIl = new StringBuilder();
     var seen = new HashSet<string>(directTargets);
     var frontier = new HashSet<string>(directTargets);
@@ -112,9 +118,9 @@ try {
             if (!method.HasBody || seen.Contains(method.FullName)) continue;
             var matches = method.Body.Instructions
                 .Where(ins => ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn)
-                .Select(ins => ins.Operand is IMethod calledMethod ? calledMethod.FullName : (ins.Operand?.ToString() ?? ""))
-                .Where(target => frontier.Contains(target))
-                .Distinct().ToList();
+                .Select(ins => ins.Operand is IMethod calledMethod ? calledMethod.ResolveMethodDef() : null)
+                .Where(target => target != null && frontier.Contains(target.FullName))
+                .Select(target => target!.FullName).Distinct().ToList();
             if (matches.Count == 0) continue;
             callerLines.Add("DEPTH=" + depth + " " + method.FullName + " => " + String.Join(" || ", matches));
             callerIl.AppendLine("\\n## DEPTH=" + depth + " " + method.FullName);
@@ -144,6 +150,19 @@ try {
         foreach (var n in next) seen.Add(n);
         frontier = next;
     }
+    var literalInventory = new SortedSet<string>();
+    foreach (var method in methods) if (method.HasBody) foreach (var ins in method.Body.Instructions)
+        if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string value) {
+            bool sensitive = Regex.IsMatch(value, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]")
+                || Regex.IsMatch(value, @"(?i)^(?:[A-Z0-9+/]{24,}={0,2}|[a-f0-9]{32,})$");
+            string category = routerCommand.IsMatch(value.Trim()) ? "ROUTEROS_COMMAND_CANDIDATE"
+                : Regex.IsMatch(value, @"(?i)(tcp|host|port|address|server|api|router|mikrotik)") ? "NETWORK_RELATED"
+                : Regex.IsMatch(value, @"(?i)(select |insert |update |delete | from | where )") ? "SQL_RELATED"
+                : Regex.IsMatch(value, @"(?i)(button|click|form|user|sales|session|hotspot|profile|print|report)") ? "UI_OR_DOMAIN"
+                : "OTHER";
+            string shown = sensitive ? "[REDACTED]" : (value.Length > 240 ? value.Substring(0,240) + "[TRUNCATED]" : value.Replace("\\r"," ").Replace("\\n"," "));
+            literalInventory.Add(method.FullName + " IL_" + ins.Offset.ToString("X4") + " [" + category + "] len=" + value.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))) + " value=" + shown);
+        }
     var formEventCandidates = new SortedSet<string>();
     var formDelegates = new SortedSet<string>();
     foreach (var type in types.Where(t => t.BaseType?.FullName?.Contains("System.Windows.Forms.Form", StringComparison.OrdinalIgnoreCase) == true)) {
@@ -167,6 +186,7 @@ try {
         }
     }
     File.WriteAllLines(formEventPath, formEventCandidates, new UTF8Encoding(false));
+    File.WriteAllLines(literalInventoryPath, literalInventory, new UTF8Encoding(false));
     File.WriteAllLines(formDelegatePath, formDelegates, new UTF8Encoding(false));
     using (var tw = new StreamWriter(typePath, false, new UTF8Encoding(false))) {
         tw.WriteLine("EntryPoint: " + (module.EntryPoint?.FullName ?? "(none)"));
@@ -204,6 +224,7 @@ try {
     log.AppendLine("- Type and form inventory: " + Path.GetFileName(typePath));
     log.AppendLine("- Form event candidate methods: " + Path.GetFileName(formEventPath));
     log.AppendLine("- Form delegate references: " + Path.GetFileName(formDelegatePath));
+    log.AppendLine("- Classified string literal inventory (with hashes/redaction): " + Path.GetFileName(literalInventoryPath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
     log.AppendLine("- Only selected non-secret identifiers and call targets are emitted; complete IL and arbitrary literals are not published.");
 } catch (Exception ex) {
