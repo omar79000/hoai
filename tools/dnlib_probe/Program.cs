@@ -25,6 +25,7 @@ string formDelegatePath = Path.Combine(output, stem + ".form-delegate-map.txt");
 string literalInventoryPath = Path.Combine(output, stem + ".literal-inventory.txt");
 string formHandlerIlPath = Path.Combine(output, stem + ".form-handler-il.txt");
 string deepFormIlPath = Path.Combine(output, stem + ".deep-form-il.txt");
+string streamIoPath = Path.Combine(output, stem + ".stream-io-evidence.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data\.OleDb|System\.Data\.Common\.DbCommand|System\.Data\.Common\.DbData|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions)");
 var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
@@ -231,6 +232,32 @@ try {
         }
     }
     File.WriteAllText(formHandlerIlPath, formHandlerIl.ToString(), new UTF8Encoding(false));
+    var streamIoIl = new StringBuilder();
+    var streamIoPattern = new Regex(@"(?i)(System\\.IO\\.(Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|MemoryStream)|NetworkStream|Socket::(Send|Receive|SendTo|ReceiveFrom)|Encoding::(GetBytes|GetString)|UTF8Encoding|ASCIIEncoding|UnicodeEncoding|Decoder::Convert|Encoder::Convert|Convert::(FromBase64String|ToBase64String))");
+    var streamSignaturePattern = new Regex(@"(?i)(NetworkStream|System\\.IO\\.Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|System\\.Net\\.Sockets\\.Socket)");
+    foreach (var method in methods) {
+        if (!method.HasBody) continue;
+        bool hasStreamCall = method.Body.Instructions.Any(ins =>
+            (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj
+                || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn)
+            && streamIoPattern.IsMatch(ins.Operand?.ToString() ?? ""));
+        bool hasStreamSignature = streamSignaturePattern.IsMatch(method.FullName);
+        if (!hasStreamCall && !hasStreamSignature) continue;
+        streamIoIl.AppendLine("\\n## METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
+        foreach (var ins in method.Body.Instructions) {
+            string operand = ins.Operand?.ToString() ?? "";
+            if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
+                bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]");
+                string shown = sensitive ? "[REDACTED]" :
+                    (routerCommand.IsMatch(literal.Trim()) && literal.Length <= 500 ? literal :
+                    "[STRING len=" + literal.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(literal))) + "]");
+                streamIoIl.AppendLine($"{ins.Offset:X4}: ldstr {shown}");
+            } else {
+                streamIoIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
+            }
+        }
+    }
+    File.WriteAllText(streamIoPath, streamIoIl.ToString(), new UTF8Encoding(false));
     var deepFormIl = new StringBuilder();
     foreach (var type in types) {
         bool isForm = type.BaseType?.FullName?.Contains("System.Windows.Forms.Form", StringComparison.OrdinalIgnoreCase) == true;
@@ -302,6 +329,7 @@ try {
     log.AppendLine("- Classified string literal inventory (with hashes/redaction): " + Path.GetFileName(literalInventoryPath));
     log.AppendLine("- Event-handler candidate IL: " + Path.GetFileName(formHandlerIlPath));
     log.AppendLine("- Full sanitized IL for network/data-bearing Forms: " + Path.GetFileName(deepFormIlPath));
+    log.AppendLine("- Stream/socket/encoding read-write evidence: " + Path.GetFileName(streamIoPath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
     log.AppendLine("- Full IL is emitted only for Forms that directly contain network/database API calls; non-command strings are hashed and sensitive-looking literals are redacted.");
 } catch (Exception ex) {
