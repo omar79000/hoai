@@ -17,9 +17,14 @@ string literalsPath = Path.Combine(output, stem + ".safe-literals.txt");
 string resourcesPath = Path.Combine(output, stem + ".resources.txt");
 string tracePath = Path.Combine(output, stem + ".targeted-il.txt");
 string eventsPath = Path.Combine(output, stem + ".ui-event-map.txt");
+string callerPath = Path.Combine(output, stem + ".network-callers.txt");
+string callerIlPath = Path.Combine(output, stem + ".network-caller-il.txt");
+string typePath = Path.Combine(output, stem + ".type-inventory.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data|System\.IO|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|StreamReader|StreamWriter|BinaryReader|BinaryWriter|Encoding|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions|Process|Registry|Configuration|Settings)");
-var eventCall = new Regex(@"(?i)(add_Click|add_MouseClick|add_DoubleClick|add_LinkClicked|add_ColumnClick)");
+var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
+var directNetworkCall = new Regex(@"(?i)(System\\.Net|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|Socket|IPAddress|Dns)");
+var directDataCall = new Regex(@"(?i)(OleDb|Odbc|SqlClient|DbCommand|DbDataAdapter|DbDataReader)");
 var routerCommand = new Regex(@"^/(ip|user|tool|queue|system|interface|ppp|radius|routing|caps-man|certificate|file|log|snmp|disk|partitions|mpls|ipv6)(\s|/)", RegexOptions.IgnoreCase);
 var safeLiteral = new Regex(@"(?i)(hotspot|user.?manager|mikrotik|routeros|radius|tcpclient|networkstream|webrequest|httpwebrequest|ftpwebrequest|oledb|selling.?points|tablesales|tablesessions|columnuser|columnprice|expiration_date|first_login|total_download|total_time|^btn[A-Za-z0-9_]+$|^form[A-Za-z0-9_]+$|^https?://[^/@\s]+$)");
 try {
@@ -86,6 +91,71 @@ try {
             }
         }
     }
+    // Build reverse call chains from methods that directly touch network or database APIs.
+    var directTargets = new HashSet<string>();
+    foreach (var method in methods) {
+        if (!method.HasBody) continue;
+        bool direct = method.Body.Instructions.Any(ins =>
+            (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
+            && (directNetworkCall.IsMatch(ins.Operand?.ToString() ?? "") || directDataCall.IsMatch(ins.Operand?.ToString() ?? "")));
+        if (direct) directTargets.Add(method.FullName);
+    }
+    var callerLines = new SortedSet<string>();
+    var callerIl = new StringBuilder();
+    var seen = new HashSet<string>(directTargets);
+    var frontier = new HashSet<string>(directTargets);
+    for (int depth = 1; depth <= 3 && frontier.Count > 0; depth++) {
+        var next = new HashSet<string>();
+        foreach (var method in methods) {
+            if (!method.HasBody || seen.Contains(method.FullName)) continue;
+            var matches = method.Body.Instructions
+                .Where(ins => ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
+                .Select(ins => ins.Operand?.ToString() ?? "")
+                .Where(target => frontier.Contains(target))
+                .Distinct().ToList();
+            if (matches.Count == 0) continue;
+            callerLines.Add("DEPTH=" + depth + " " + method.FullName + " => " + String.Join(" || ", matches));
+            callerIl.AppendLine("\\n## DEPTH=" + depth + " " + method.FullName);
+            foreach (var ins in method.Body.Instructions) {
+                string operand = ins.Operand?.ToString() ?? "";
+                if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj
+                    || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn) {
+                    callerIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
+                    if (ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn)
+                        uiEvents.Add("LD_FTN " + method.FullName + " => " + operand);
+                    if (eventCall.IsMatch(operand))
+                        uiEvents.Add("EVENT_CALL " + method.FullName + " => " + operand);
+                } else if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string str) {
+                    if (routerCommand.IsMatch(str.Trim()) && str.Length <= 500
+                        && !Regex.IsMatch(str, @"(?i)(password|passwd|token|secret|api.?key)\\s*[:=]"))
+                        callerIl.AppendLine($"{ins.Offset:X4}: ldstr {str}");
+                    else callerIl.AppendLine($"{ins.Offset:X4}: ldstr [string omitted]");
+                } else if (ins.OpCode.Name.StartsWith("ldc.i4", StringComparison.Ordinal)
+                    || ins.OpCode.Name.StartsWith("ldc.i8", StringComparison.Ordinal)
+                    || ins.OpCode.FlowControl == FlowControl.Branch
+                    || ins.OpCode.FlowControl == FlowControl.Cond_Branch) {
+                    callerIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
+                }
+            }
+            next.Add(method.FullName);
+        }
+        foreach (var n in next) seen.Add(n);
+        frontier = next;
+    }
+    using (var tw = new StreamWriter(typePath, false, new UTF8Encoding(false))) {
+        tw.WriteLine("EntryPoint: " + (module.EntryPoint?.FullName ?? "(none)"));
+        foreach (var type in types.OrderBy(t => t.FullName, StringComparer.Ordinal)) {
+            tw.WriteLine("TYPE " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? "(none)") + " METHODS=" + type.Methods.Count);
+            foreach (var method in type.Methods) {
+                bool hasBody = method.HasBody;
+                bool namedInteresting = Regex.IsMatch(method.Name.String, @"(?i)(InitializeComponent|Main|Click|Mouse|Double|Load|Shown|Closing|Activated|Form)");
+                if (namedInteresting || method.Name == "InitializeComponent" || type.BaseType?.FullName?.Contains("System.Windows.Forms", StringComparison.OrdinalIgnoreCase) == true)
+                    tw.WriteLine("  METHOD " + method.FullName + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " BODY=" + hasBody);
+            }
+        }
+    }
+    File.WriteAllLines(callerPath, callerLines, new UTF8Encoding(false));
+    File.WriteAllText(callerIlPath, callerIl.ToString(), new UTF8Encoding(false));
     File.WriteAllText(tracePath, targetedIl.ToString(), new UTF8Encoding(false));
     File.WriteAllLines(eventsPath, uiEvents, new UTF8Encoding(false));
     File.WriteAllLines(methodsPath, calls, new UTF8Encoding(false));
@@ -103,6 +173,9 @@ try {
     log.AppendLine("- Resource inventory: " + Path.GetFileName(resourcesPath));
     log.AppendLine("- Targeted network/data and UI event IL: " + Path.GetFileName(tracePath));
     log.AppendLine("- UI event hookup map: " + Path.GetFileName(eventsPath));
+    log.AppendLine("- Reverse network/database caller map: " + Path.GetFileName(callerPath));
+    log.AppendLine("- Caller IL: " + Path.GetFileName(callerIlPath));
+    log.AppendLine("- Type and form inventory: " + Path.GetFileName(typePath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
     log.AppendLine("- Only selected non-secret identifiers and call targets are emitted; complete IL and arbitrary literals are not published.");
 } catch (Exception ex) {
