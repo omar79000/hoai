@@ -247,7 +247,7 @@ try {
             foreach (var ins in method.Body.Instructions) {
                 string operand = ins.Operand?.ToString() ?? "";
                 if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
-                    bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]");
+                    bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\s*[:=]");
                     string shown = sensitive ? "[REDACTED]" :
                         (routerCommand.IsMatch(literal.Trim()) && literal.Length <= 500 ? literal.Replace("\\r"," ").Replace("\\n"," ") :
                         "[STRING len=" + literal.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(literal))) + "]");
