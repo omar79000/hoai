@@ -20,6 +20,8 @@ string eventsPath = Path.Combine(output, stem + ".ui-event-map.txt");
 string callerPath = Path.Combine(output, stem + ".network-callers.txt");
 string callerIlPath = Path.Combine(output, stem + ".network-caller-il.txt");
 string typePath = Path.Combine(output, stem + ".type-inventory.txt");
+string formEventPath = Path.Combine(output, stem + ".form-event-candidates.txt");
+string formDelegatePath = Path.Combine(output, stem + ".form-delegate-map.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data\.OleDb|System\.Data\.Common\.DbCommand|System\.Data\.Common\.DbData|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions)");
 var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
@@ -109,8 +111,8 @@ try {
         foreach (var method in methods) {
             if (!method.HasBody || seen.Contains(method.FullName)) continue;
             var matches = method.Body.Instructions
-                .Where(ins => ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
-                .Select(ins => ins.Operand?.ToString() ?? "")
+                .Where(ins => ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn)
+                .Select(ins => ins.Operand is IMethod calledMethod ? calledMethod.FullName : (ins.Operand?.ToString() ?? ""))
                 .Where(target => frontier.Contains(target))
                 .Distinct().ToList();
             if (matches.Count == 0) continue;
@@ -142,6 +144,30 @@ try {
         foreach (var n in next) seen.Add(n);
         frontier = next;
     }
+    var formEventCandidates = new SortedSet<string>();
+    var formDelegates = new SortedSet<string>();
+    foreach (var type in types.Where(t => t.BaseType?.FullName?.Contains("System.Windows.Forms.Form", StringComparison.OrdinalIgnoreCase) == true)) {
+        foreach (var method in type.Methods) {
+            string signature = method.FullName;
+            if (Regex.IsMatch(signature, @"(?i)System\\.Object,.*(EventArgs|MouseEventArgs|KeyEventArgs|DataGridView.*EventArgs|LinkLabelLinkClickedEventArgs|FormClosingEventArgs|FormClosedEventArgs)")) {
+                formEventCandidates.Add("TYPE=" + type.FullName + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + signature);
+            }
+            if (!method.HasBody) continue;
+            foreach (var ins in method.Body.Instructions) {
+                if (ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn) {
+                    string target = ins.Operand is IMethod im ? im.FullName : (ins.Operand?.ToString() ?? "");
+                    formDelegates.Add("FORM_METHOD=" + method.FullName + " => " + target);
+                }
+                if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt) {
+                    string target = ins.Operand is IMethod im ? im.FullName : (ins.Operand?.ToString() ?? "");
+                    if (eventCall.IsMatch(target))
+                        formDelegates.Add("EVENT_ATTACH=" + method.FullName + " => " + target);
+                }
+            }
+        }
+    }
+    File.WriteAllLines(formEventPath, formEventCandidates, new UTF8Encoding(false));
+    File.WriteAllLines(formDelegatePath, formDelegates, new UTF8Encoding(false));
     using (var tw = new StreamWriter(typePath, false, new UTF8Encoding(false))) {
         tw.WriteLine("EntryPoint: " + (module.EntryPoint?.FullName ?? "(none)"));
         foreach (var type in types.OrderBy(t => t.FullName, StringComparer.Ordinal)) {
@@ -176,6 +202,8 @@ try {
     log.AppendLine("- Reverse network/database caller map: " + Path.GetFileName(callerPath));
     log.AppendLine("- Caller IL: " + Path.GetFileName(callerIlPath));
     log.AppendLine("- Type and form inventory: " + Path.GetFileName(typePath));
+    log.AppendLine("- Form event candidate methods: " + Path.GetFileName(formEventPath));
+    log.AppendLine("- Form delegate references: " + Path.GetFileName(formDelegatePath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
     log.AppendLine("- Only selected non-secret identifiers and call targets are emitted; complete IL and arbitrary literals are not published.");
 } catch (Exception ex) {
