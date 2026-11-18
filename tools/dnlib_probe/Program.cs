@@ -149,13 +149,13 @@ try {
     foreach (var type in types.Where(t => t.BaseType?.FullName?.Contains("System.Windows.Forms.Form", StringComparison.OrdinalIgnoreCase) == true)) {
         foreach (var method in type.Methods) {
             string signature = method.FullName;
-            if (Regex.IsMatch(signature, @"(?i)System\\.Object,.*(EventArgs|MouseEventArgs|KeyEventArgs|DataGridView.*EventArgs|LinkLabelLinkClickedEventArgs|FormClosingEventArgs|FormClosedEventArgs)")) {
+            if (Regex.IsMatch(signature, @"(?i)System\.Object,.*(EventArgs|MouseEventArgs|KeyEventArgs|DataGridView.*EventArgs|LinkLabelLinkClickedEventArgs|FormClosingEventArgs|FormClosedEventArgs)")) {
                 formEventCandidates.Add("TYPE=" + type.FullName + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + signature);
             }
             if (!method.HasBody) continue;
             foreach (var ins in method.Body.Instructions) {
                 if (ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn) {
-                    string target = ins.Operand is IMethod im ? im.FullName : (ins.Operand?.ToString() ?? "");
+                    string target = ins.Operand is IMethod methodRef1 ? methodRef1.FullName : (ins.Operand?.ToString() ?? "");
                     formDelegates.Add("FORM_METHOD=" + method.FullName + " => " + target);
                 }
                 if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt) {
