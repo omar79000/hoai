@@ -233,8 +233,8 @@ try {
     }
     File.WriteAllText(formHandlerIlPath, formHandlerIl.ToString(), new UTF8Encoding(false));
     var streamIoIl = new StringBuilder();
-    var streamIoPattern = new Regex(@"(?i)(System\\.IO\\.(Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|MemoryStream)|NetworkStream|Socket::(Send|Receive|SendTo|ReceiveFrom)|Encoding::(GetBytes|GetString)|UTF8Encoding|ASCIIEncoding|UnicodeEncoding|Decoder::Convert|Encoder::Convert|Convert::(FromBase64String|ToBase64String))");
-    var streamSignaturePattern = new Regex(@"(?i)(NetworkStream|System\\.IO\\.Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|System\\.Net\\.Sockets\\.Socket)");
+    var streamIoPattern = new Regex(@"(?i)(System\.IO\.(Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|MemoryStream)|NetworkStream|Socket::(Send|Receive|SendTo|ReceiveFrom)|Encoding::(GetBytes|GetString)|UTF8Encoding|ASCIIEncoding|UnicodeEncoding|Decoder::Convert|Encoder::Convert|Convert::(FromBase64String|ToBase64String))");
+    var streamSignaturePattern = new Regex(@"(?i)(NetworkStream|System\.IO\.Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|System\.Net\.Sockets\.Socket)");
     foreach (var method in methods) {
         if (!method.HasBody) continue;
         bool hasStreamCall = method.Body.Instructions.Any(ins =>
@@ -243,11 +243,11 @@ try {
             && streamIoPattern.IsMatch(ins.Operand?.ToString() ?? ""));
         bool hasStreamSignature = streamSignaturePattern.IsMatch(method.FullName);
         if (!hasStreamCall && !hasStreamSignature) continue;
-        streamIoIl.AppendLine("\\n## METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
+        streamIoIl.AppendLine("\n## METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
         foreach (var ins in method.Body.Instructions) {
             string operand = ins.Operand?.ToString() ?? "";
             if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
-                bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]");
+                bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\s*[:=]");
                 string shown = sensitive ? "[REDACTED]" :
                     (routerCommand.IsMatch(literal.Trim()) && literal.Length <= 500 ? literal :
                     "[STRING len=" + literal.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(literal))) + "]");
