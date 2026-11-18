@@ -24,6 +24,7 @@ string formEventPath = Path.Combine(output, stem + ".form-event-candidates.txt")
 string formDelegatePath = Path.Combine(output, stem + ".form-delegate-map.txt");
 string literalInventoryPath = Path.Combine(output, stem + ".literal-inventory.txt");
 string formHandlerIlPath = Path.Combine(output, stem + ".form-handler-il.txt");
+string deepFormIlPath = Path.Combine(output, stem + ".deep-form-il.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data\.OleDb|System\.Data\.Common\.DbCommand|System\.Data\.Common\.DbData|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions)");
 var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
@@ -230,6 +231,34 @@ try {
         }
     }
     File.WriteAllText(formHandlerIlPath, formHandlerIl.ToString(), new UTF8Encoding(false));
+    var deepFormIl = new StringBuilder();
+    foreach (var type in types) {
+        bool isForm = type.BaseType?.FullName?.Contains("System.Windows.Forms.Form", StringComparison.OrdinalIgnoreCase) == true;
+        bool hasDirectNetworkOrData = type.Methods.Any(m => m.HasBody && m.Body.Instructions.Any(ins =>
+            (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
+            && (directNetworkCall.IsMatch(ins.Operand?.ToString() ?? "") || directDataCall.IsMatch(ins.Operand?.ToString() ?? ""))));
+        if (!isForm || !hasDirectNetworkOrData) continue;
+        deepFormIl.AppendLine("\n## TYPE TOKEN=" + type.MDToken.Raw.ToString("X8") + " " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? ""));
+        foreach (var field in type.Fields)
+            deepFormIl.AppendLine("FIELD TOKEN=" + field.MDToken.Raw.ToString("X8") + " " + field.FieldType.FullName + " " + field.Name);
+        foreach (var method in type.Methods) {
+            deepFormIl.AppendLine("\n### METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
+            if (!method.HasBody) { deepFormIl.AppendLine("[NO BODY]"); continue; }
+            foreach (var ins in method.Body.Instructions) {
+                string operand = ins.Operand?.ToString() ?? "";
+                if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
+                    bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]");
+                    string shown = sensitive ? "[REDACTED]" :
+                        (routerCommand.IsMatch(literal.Trim()) && literal.Length <= 500 ? literal.Replace("\\r"," ").Replace("\\n"," ") :
+                        "[STRING len=" + literal.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(literal))) + "]");
+                    deepFormIl.AppendLine($"{ins.Offset:X4}: ldstr {shown}");
+                } else {
+                    deepFormIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
+                }
+            }
+        }
+    }
+    File.WriteAllText(deepFormIlPath, deepFormIl.ToString(), new UTF8Encoding(false));
     using (var tw = new StreamWriter(typePath, false, new UTF8Encoding(false))) {
         tw.WriteLine("EntryPoint: " + (module.EntryPoint?.FullName ?? "(none)"));
         foreach (var type in types.OrderBy(t => t.FullName, StringComparer.Ordinal)) {
@@ -272,8 +301,9 @@ try {
     log.AppendLine("- Form delegate references: " + Path.GetFileName(formDelegatePath));
     log.AppendLine("- Classified string literal inventory (with hashes/redaction): " + Path.GetFileName(literalInventoryPath));
     log.AppendLine("- Event-handler candidate IL: " + Path.GetFileName(formHandlerIlPath));
+    log.AppendLine("- Full sanitized IL for network/data-bearing Forms: " + Path.GetFileName(deepFormIlPath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
-    log.AppendLine("- Only selected non-secret identifiers and call targets are emitted; complete IL and arbitrary literals are not published.");
+    log.AppendLine("- Full IL is emitted only for Forms that directly contain network/database API calls; non-command strings are hashed and sensitive-looking literals are redacted.");
 } catch (Exception ex) {
     log.AppendLine("# dnlib static parse report\n");
     log.AppendLine("- Input: " + Path.GetFileName(input));
