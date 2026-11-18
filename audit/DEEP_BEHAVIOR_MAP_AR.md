@@ -157,3 +157,48 @@
 تقرير الأدلة التفصيلي: [DNLIB_PARSE_FINDINGS_AR.md](DNLIB_PARSE_FINDINGS_AR.md).
 
 أضيف الآن استخراج IL موجهًا لأجسام دوال الشبكة والبيانات، وربطًا لأحداث WinForms عبر `ldftn` و`add_Click` ونظائرها. هذا هو المسار الذي يمكن أن يكشف معاملات Connect، والثوابت، وربط الزر بالدالة. لم يتم تشغيل EXE أو الاتصال براوتر.
+
+
+## 11. اكتشاف نموذج اتصال TCP داخل واجهة WinForms — تشغيل 44207699308
+
+نجح تشغيل dnlib المصحح في قراءة النسختين، ونُشر تقرير التحليل المنقح في Artifact رقم `14384686967` (تشغيل [44207699308](https://github.com/omar79000/hoai/actions/runs/44207699308)).
+
+### 11.1 النموذج الذي يحتوي مسار TCP
+
+في النسختين توجد فئة مشتقة مباشرة من `System.Windows.Forms.Form` تحتوي 94 Method، وبداخلها دوال مساعدة تستدعي TCP مباشرة:
+
+| العنصر | 16.02.2 | 16.02.3 |
+|---|---|---|
+| فئة Form المرشحة | `x(<:sj+vsyy%4%z8,mrzCzs*` | `B3WbO\\q:tt44BYB;;|iWh5`[%` |
+| عدد الدوال | 94 | 94 |
+| إنشاء TcpClient | Token `06000B34` | Token `06000B45` |
+| Connect(host, port) | Token `06000B35` | Token `06000B46` |
+| GetStream() | Token `06000B36` | Token `06000B47` |
+| IPAddress.TryParse | Token `06000B2C` | Token `06000B3D` |
+| RadioButton.Checked helper | Token `06000B38` | Token `06000B49` |
+| Control.Text helper | Token `06000B39` | Token `06000B4A` |
+| CheckBox.Checked helper | Token `06000B43` | Token `06000B??`؛ راجع type-inventory |
+
+هذه ليست مجرد مراجع مكتبة: جسم الدالة الخاصة بــ Connect ينفذ `TcpClient.Connect(string,int)`، والدالة الخاصة بــ GetStream تنفذ `TcpClient.GetStream()`. الوسيطان host وport يمران إلى wrapper، ولا توجد قيمة ثابتة لهما في جسم wrapper نفسه.
+
+### 11.2 مؤشرات أن النموذج واجهة إعداد/اتصال
+
+تحتوي الفئة نفسها على:
+- دوال تحقق من عنوان IP باستخدام `IPAddress.TryParse`.
+- دوال تقرأ `RadioButton.Checked` و`CheckBox.Checked` و`Control.Text`.
+- دوال تشغيل `BackgroundWorker` ومعالجة `DoWork` و`RunWorkerCompleted`.
+- عناصر واجهة من نوع `Label` و`TextBox` و`Button` و`TableLayoutPanel` و`CheckBox` و`RadioButton`.
+
+هذا يثبت أن اتصال TCP موجود داخل نموذج واجهة تفاعلي ويحتمل أن يكون نموذج إعداد/اتصال. لا يثبت وحده أن الوجهة MikroTik أو أن البروتوكول RouterOS API.
+
+### 11.3 ما زال غير محسوم
+
+- لم يُكشف بعد أي حقل بعينه يمثل عنوان الراوتر أو المنفذ أو اسم المستخدم أو كلمة المرور.
+- لم يُكشف أي `NetworkStream.Write/Read` مرتبط بعملية الاتصال.
+- لم تُستخرج صيغة المصادقة أو كلمات RouterOS أو حدود الرسائل.
+- ملف `network-callers.txt` أصبح يسجل دوال API المباشرة مع MethodDef tokens، لكنه لا يحتوي روابط `DEPTH=` إلى مستدعياتها. لذلك لا نعتبره call graph مكتملًا.
+- ملف `form-delegate-map.txt` يكشف نقاط ربط BackgroundWorker/Timer لكنه لم يربط delegates بأسماء handlers؛ الربط القريب عبر ldftn غير ظاهر في هذه المقاطع.
+
+### 11.4 قرار التحليل التالي
+
+أضيف استخراج IL كاملًا ومنقحًا للنماذج التي تحتوي استدعاءات TCP أو OleDb، مع حقولها وMethodDef tokens، مع إخفاء النصوص غير المعروفة بواسطة SHA-256 وإخفاء النصوص الحساسة. الهدف هو كشف كيف تنتقل القيم من عناصر الواجهة إلى دوال الاتصال، وكيف تُكتب وتُقرأ بيانات الشبكة، دون تشغيل التطبيق أو تجاوز الحماية.
