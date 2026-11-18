@@ -177,7 +177,7 @@
 | IPAddress.TryParse | Token `06000B2C` | Token `06000B3D` |
 | RadioButton.Checked helper | Token `06000B38` | Token `06000B49` |
 | Control.Text helper | Token `06000B39` | Token `06000B4A` |
-| CheckBox.Checked helper | Token `06000B43` | Token `06000B??`؛ راجع type-inventory |
+| CheckBox.Checked helper | Token `06000B43` | Token `06000B54` |
 
 هذه ليست مجرد مراجع مكتبة: جسم الدالة الخاصة بــ Connect ينفذ `TcpClient.Connect(string,int)`، والدالة الخاصة بــ GetStream تنفذ `TcpClient.GetStream()`. الوسيطان host وport يمران إلى wrapper، ولا توجد قيمة ثابتة لهما في جسم wrapper نفسه.
 
