@@ -26,6 +26,7 @@ string literalInventoryPath = Path.Combine(output, stem + ".literal-inventory.tx
 string formHandlerIlPath = Path.Combine(output, stem + ".form-handler-il.txt");
 string deepFormIlPath = Path.Combine(output, stem + ".deep-form-il.txt");
 string streamIoPath = Path.Combine(output, stem + ".stream-io-evidence.txt");
+string deepTcpTypesPath = Path.Combine(output, stem + ".deep-tcp-types-il.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data\.OleDb|System\.Data\.Common\.DbCommand|System\.Data\.Common\.DbData|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions)");
 var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
@@ -232,6 +233,33 @@ try {
         }
     }
     File.WriteAllText(formHandlerIlPath, formHandlerIl.ToString(), new UTF8Encoding(false));
+    var deepTcpTypesIl = new StringBuilder();
+    foreach (var type in types) {
+        bool hasTcp = type.Methods.Any(m => m.HasBody && m.Body.Instructions.Any(ins =>
+            (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
+            && Regex.IsMatch(ins.Operand?.ToString() ?? "", @"(?i)(TcpClient|NetworkStream)")));
+        if (!hasTcp) continue;
+        deepTcpTypesIl.AppendLine("\\n## TYPE TOKEN=" + type.MDToken.Raw.ToString("X8") + " " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? ""));
+        foreach (var field in type.Fields)
+            deepTcpTypesIl.AppendLine("FIELD TOKEN=" + field.MDToken.Raw.ToString("X8") + " " + field.FieldType.FullName + " " + field.Name);
+        foreach (var method in type.Methods) {
+            deepTcpTypesIl.AppendLine("\\n### METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
+            if (!method.HasBody) { deepTcpTypesIl.AppendLine("[NO BODY]"); continue; }
+            foreach (var ins in method.Body.Instructions) {
+                string operand = ins.Operand?.ToString() ?? "";
+                if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
+                    bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]");
+                    string shown = sensitive ? "[REDACTED]" :
+                        (routerCommand.IsMatch(literal.Trim()) && literal.Length <= 500 ? literal :
+                        "[STRING len=" + literal.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(literal))) + "]");
+                    deepTcpTypesIl.AppendLine($"{ins.Offset:X4}: ldstr {shown}");
+                } else {
+                    deepTcpTypesIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
+                }
+            }
+        }
+    }
+    File.WriteAllText(deepTcpTypesPath, deepTcpTypesIl.ToString(), new UTF8Encoding(false));
     var streamIoIl = new StringBuilder();
     var streamIoPattern = new Regex(@"(?i)(System\.IO\.(Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|MemoryStream)|NetworkStream|Socket::(Send|Receive|SendTo|ReceiveFrom)|Encoding::(GetBytes|GetString)|UTF8Encoding|ASCIIEncoding|UnicodeEncoding|Decoder::Convert|Encoder::Convert|Convert::(FromBase64String|ToBase64String))");
     var streamSignaturePattern = new Regex(@"(?i)(NetworkStream|System\.IO\.Stream|BinaryReader|BinaryWriter|StreamReader|StreamWriter|System\.Net\.Sockets\.Socket)");
@@ -330,6 +358,7 @@ try {
     log.AppendLine("- Event-handler candidate IL: " + Path.GetFileName(formHandlerIlPath));
     log.AppendLine("- Full sanitized IL for network/data-bearing Forms: " + Path.GetFileName(deepFormIlPath));
     log.AppendLine("- Stream/socket/encoding read-write evidence: " + Path.GetFileName(streamIoPath));
+    log.AppendLine("- Full sanitized IL for TcpClient-bearing types: " + Path.GetFileName(deepTcpTypesPath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
     log.AppendLine("- Full IL is emitted only for Forms that directly contain network/database API calls; non-command strings are hashed and sensitive-looking literals are redacted.");
 } catch (Exception ex) {
