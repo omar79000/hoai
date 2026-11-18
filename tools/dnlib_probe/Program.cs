@@ -239,16 +239,16 @@ try {
             (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
             && Regex.IsMatch(ins.Operand?.ToString() ?? "", @"(?i)(TcpClient|NetworkStream)")));
         if (!hasTcp) continue;
-        deepTcpTypesIl.AppendLine("\\n## TYPE TOKEN=" + type.MDToken.Raw.ToString("X8") + " " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? ""));
+        deepTcpTypesIl.AppendLine("\n## TYPE TOKEN=" + type.MDToken.Raw.ToString("X8") + " " + type.FullName + " BASE=" + (type.BaseType?.FullName ?? ""));
         foreach (var field in type.Fields)
             deepTcpTypesIl.AppendLine("FIELD TOKEN=" + field.MDToken.Raw.ToString("X8") + " " + field.FieldType.FullName + " " + field.Name);
         foreach (var method in type.Methods) {
-            deepTcpTypesIl.AppendLine("\\n### METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
+            deepTcpTypesIl.AppendLine("\n### METHOD TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + method.FullName);
             if (!method.HasBody) { deepTcpTypesIl.AppendLine("[NO BODY]"); continue; }
             foreach (var ins in method.Body.Instructions) {
                 string operand = ins.Operand?.ToString() ?? "";
                 if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
-                    bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]");
+                    bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\s*[:=]");
                     string shown = sensitive ? "[REDACTED]" :
                         (routerCommand.IsMatch(literal.Trim()) && literal.Length <= 500 ? literal :
                         "[STRING len=" + literal.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(literal))) + "]");
