@@ -23,6 +23,7 @@ string typePath = Path.Combine(output, stem + ".type-inventory.txt");
 string formEventPath = Path.Combine(output, stem + ".form-event-candidates.txt");
 string formDelegatePath = Path.Combine(output, stem + ".form-delegate-map.txt");
 string literalInventoryPath = Path.Combine(output, stem + ".literal-inventory.txt");
+string formHandlerIlPath = Path.Combine(output, stem + ".form-handler-il.txt");
 var log = new StringBuilder();
 var interestingCall = new Regex(@"(?i)(System\.Net|System\.Data\.OleDb|System\.Data\.Common\.DbCommand|System\.Data\.Common\.DbData|System\.Windows\.Forms|OleDb|Odbc|SqlClient|TcpClient|NetworkStream|WebRequest|HttpWebRequest|FtpWebRequest|NetworkCredential|IPAddress|Dns|Socket|RouterOS|MikroTik|Hotspot|User.?Manager|CrystalDecisions)");
 var eventCall = new Regex(@"(?i)(add_[A-Za-z0-9_]+|EventHandlerList::AddHandler)");
@@ -193,6 +194,35 @@ try {
     File.WriteAllLines(formEventPath, formEventCandidates, new UTF8Encoding(false));
     File.WriteAllLines(literalInventoryPath, literalInventory, new UTF8Encoding(false));
     File.WriteAllLines(formDelegatePath, formDelegates, new UTF8Encoding(false));
+    var formHandlerIl = new StringBuilder();
+    foreach (var type in types) {
+        foreach (var method in type.Methods) {
+            if (!method.HasBody) continue;
+            string sig = method.FullName;
+            bool eventCandidate = Regex.IsMatch(sig, @"(?i)System\.Object,.*(EventArgs|MouseEventArgs|KeyEventArgs|DataGridView.*EventArgs|LinkLabelLinkClickedEventArgs|FormClosingEventArgs|FormClosedEventArgs)");
+            if (!eventCandidate) continue;
+            formHandlerIl.AppendLine("\n## TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + sig);
+            foreach (var ins in method.Body.Instructions) {
+                string operand = ins.Operand?.ToString() ?? "";
+                if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj
+                    || ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn
+                    || ins.OpCode == OpCodes.Ldstr
+                    || ins.OpCode.Name.StartsWith("ldc.i4", StringComparison.Ordinal)
+                    || ins.OpCode.Name.StartsWith("ldc.i8", StringComparison.Ordinal)
+                    || ins.OpCode.FlowControl == FlowControl.Branch
+                    || ins.OpCode.FlowControl == FlowControl.Cond_Branch) {
+                    if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string literal) {
+                        bool sensitive = Regex.IsMatch(literal, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\s*[:=]");
+                        string shown = sensitive ? "[REDACTED]" : (literal.Length > 200 ? literal.Substring(0,200) + "[TRUNCATED]" : literal);
+                        formHandlerIl.AppendLine($"{ins.Offset:X4}: ldstr {shown}");
+                    } else {
+                        formHandlerIl.AppendLine($"{ins.Offset:X4}: {ins.OpCode.Name} {operand}");
+                    }
+                }
+            }
+        }
+    }
+    File.WriteAllText(formHandlerIlPath, formHandlerIl.ToString(), new UTF8Encoding(false));
     using (var tw = new StreamWriter(typePath, false, new UTF8Encoding(false))) {
         tw.WriteLine("EntryPoint: " + (module.EntryPoint?.FullName ?? "(none)"));
         foreach (var type in types.OrderBy(t => t.FullName, StringComparer.Ordinal)) {
@@ -200,7 +230,7 @@ try {
             foreach (var method in type.Methods) {
                 bool hasBody = method.HasBody;
                 bool namedInteresting = Regex.IsMatch(method.Name.String, @"(?i)(InitializeComponent|Main|Click|Mouse|Double|Load|Shown|Closing|Activated|Form)");
-                if (namedInteresting || method.Name == "InitializeComponent" || type.BaseType?.FullName?.Contains("System.Windows.Forms", StringComparison.OrdinalIgnoreCase) == true)
+                if (namedInteresting || method.Name == "InitializeComponent" || type.BaseType?.FullName?.Contains("System.Windows.Forms", StringComparison.OrdinalIgnoreCase) == true || hasDirectNetworkOrData)
                     tw.WriteLine("  METHOD " + method.FullName + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " BODY=" + hasBody);
             }
         }
@@ -230,6 +260,7 @@ try {
     log.AppendLine("- Form event candidate methods: " + Path.GetFileName(formEventPath));
     log.AppendLine("- Form delegate references: " + Path.GetFileName(formDelegatePath));
     log.AppendLine("- Classified string literal inventory (with hashes/redaction): " + Path.GetFileName(literalInventoryPath));
+    log.AppendLine("- Event-handler candidate IL: " + Path.GetFileName(formHandlerIlPath));
     log.AppendLine("- Method map: " + Path.GetFileName(methodsPath));
     log.AppendLine("- Only selected non-secret identifiers and call targets are emitted; complete IL and arbitrary literals are not published.");
 } catch (Exception ex) {
