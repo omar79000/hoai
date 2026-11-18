@@ -55,7 +55,7 @@ try {
             (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt)
             && eventCall.IsMatch(ins.Operand?.ToString() ?? ""));
         if (hasNetworkCall || hasUiEventHook) {
-            targetedIl.AppendLine("\\n## " + method.FullName);
+            targetedIl.AppendLine("\n## " + method.FullName);
             if (hasNetworkCall) targetedIl.AppendLine("TRACE_KIND=NETWORK_OR_DATA");
             if (hasUiEventHook) targetedIl.AppendLine("TRACE_KIND=UI_EVENT_WIRING");
         }
@@ -75,9 +75,9 @@ try {
                     }
                 }
             } else if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string value) {
-                if (value.Length <= 500 && !Regex.IsMatch(value, @"(?i)(password|passwd|token|secret|api.?key)\\s*[:=]")) {
+                if (value.Length <= 500 && !Regex.IsMatch(value, @"(?i)(password|passwd|token|secret|api.?key)\s*[:=]")) {
                     if (routerCommand.IsMatch(value.Trim())) {
-                        string safeValue = Regex.Replace(value.Replace("\\r"," ").Replace("\\n"," "), @"(?i)\\b(password|passwd|secret|token|community|passphrase)\\s*=\\s*(""[^""]*""|\\S+)", "$1=[REDACTED]");
+                        string safeValue = Regex.Replace(value.Replace("\r"," ").Replace("\n"," "), @"(?i)\b(password|passwd|secret|token|community|passphrase)\s*=\s*(""[^""]*""|\S+)", "$1=[REDACTED]");
                         literals.Add(method.FullName + " :: " + safeValue);
                         if (hasNetworkCall || hasUiEventHook) targetedIl.AppendLine($"{ins.Offset:X4}: ldstr {safeValue}");
                     } else if (hasNetworkCall || hasUiEventHook) {
@@ -104,11 +104,6 @@ try {
         if (direct) directTargets.Add(method.FullName);
     }
     var callerLines = new SortedSet<string>();
-    var directTargetTokens = new HashSet<uint>();
-    foreach (var method in methods) if (method.HasBody && method.Body.Instructions.Any(ins =>
-        (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj)
-        && (directNetworkCall.IsMatch(ins.Operand?.ToString() ?? "") || directDataCall.IsMatch(ins.Operand?.ToString() ?? ""))))
-        directTargetTokens.Add(method.MDToken.Raw);
     var callerIl = new StringBuilder();
     var seen = new HashSet<string>(directTargets);
     var frontier = new HashSet<string>(directTargets);
@@ -123,7 +118,7 @@ try {
                 .Select(target => target!.FullName).Distinct().ToList();
             if (matches.Count == 0) continue;
             callerLines.Add("DEPTH=" + depth + " " + method.FullName + " => " + String.Join(" || ", matches));
-            callerIl.AppendLine("\\n## DEPTH=" + depth + " " + method.FullName);
+            callerIl.AppendLine("\n## DEPTH=" + depth + " " + method.FullName);
             foreach (var ins in method.Body.Instructions) {
                 string operand = ins.Operand?.ToString() ?? "";
                 if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj
@@ -135,7 +130,7 @@ try {
                         uiEvents.Add("EVENT_CALL " + method.FullName + " => " + operand);
                 } else if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string str) {
                     if (routerCommand.IsMatch(str.Trim()) && str.Length <= 500
-                        && !Regex.IsMatch(str, @"(?i)(password|passwd|token|secret|api.?key)\\s*[:=]"))
+                        && !Regex.IsMatch(str, @"(?i)(password|passwd|token|secret|api.?key)\s*[:=]"))
                         callerIl.AppendLine($"{ins.Offset:X4}: ldstr {str}");
                     else callerIl.AppendLine($"{ins.Offset:X4}: ldstr [string omitted]");
                 } else if (ins.OpCode.Name.StartsWith("ldc.i4", StringComparison.Ordinal)
@@ -153,14 +148,14 @@ try {
     var literalInventory = new SortedSet<string>();
     foreach (var method in methods) if (method.HasBody) foreach (var ins in method.Body.Instructions)
         if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string value) {
-            bool sensitive = Regex.IsMatch(value, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\\s*[:=]")
+            bool sensitive = Regex.IsMatch(value, @"(?i)(password|passwd|token|secret|api.?key|community|passphrase)\s*[:=]")
                 || Regex.IsMatch(value, @"(?i)^(?:[A-Z0-9+/]{24,}={0,2}|[a-f0-9]{32,})$");
             string category = routerCommand.IsMatch(value.Trim()) ? "ROUTEROS_COMMAND_CANDIDATE"
                 : Regex.IsMatch(value, @"(?i)(tcp|host|port|address|server|api|router|mikrotik)") ? "NETWORK_RELATED"
                 : Regex.IsMatch(value, @"(?i)(select |insert |update |delete | from | where )") ? "SQL_RELATED"
                 : Regex.IsMatch(value, @"(?i)(button|click|form|user|sales|session|hotspot|profile|print|report)") ? "UI_OR_DOMAIN"
                 : "OTHER";
-            string shown = sensitive ? "[REDACTED]" : (value.Length > 240 ? value.Substring(0,240) + "[TRUNCATED]" : value.Replace("\\r"," ").Replace("\\n"," "));
+            string shown = sensitive ? "[REDACTED]" : (value.Length > 240 ? value.Substring(0,240) + "[TRUNCATED]" : value.Replace("\r"," ").Replace("\n"," "));
             literalInventory.Add(method.FullName + " IL_" + ins.Offset.ToString("X4") + " [" + category + "] len=" + value.Length + " sha256=" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))) + " value=" + shown);
         }
     var formEventCandidates = new SortedSet<string>();
@@ -172,15 +167,25 @@ try {
                 formEventCandidates.Add("TYPE=" + type.FullName + " TOKEN=" + method.MDToken.Raw.ToString("X8") + " " + signature);
             }
             if (!method.HasBody) continue;
-            foreach (var ins in method.Body.Instructions) {
+            for (int eventIndex = 0; eventIndex < method.Body.Instructions.Count; eventIndex++) {
+                var ins = method.Body.Instructions[eventIndex];
                 if (ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn) {
                     string target = ins.Operand is IMethod methodRef1 ? methodRef1.FullName : (ins.Operand?.ToString() ?? "");
                     formDelegates.Add("FORM_METHOD=" + method.FullName + " => " + target);
                 }
                 if (ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt) {
                     string target = ins.Operand is IMethod im ? im.FullName : (ins.Operand?.ToString() ?? "");
-                    if (eventCall.IsMatch(target))
-                        formDelegates.Add("EVENT_ATTACH=" + method.FullName + " => " + target);
+                    if (eventCall.IsMatch(target)) {
+                        string handler = "(no nearby ldftn found)";
+                        for (int k = eventIndex - 1; k >= Math.Max(0, eventIndex - 12); k--) {
+                            var prior = method.Body.Instructions[k];
+                            if (prior.OpCode == OpCodes.Ldftn || prior.OpCode == OpCodes.Ldvirtftn) {
+                                handler = prior.Operand is IMethod handlerRef ? handlerRef.FullName : (prior.Operand?.ToString() ?? handler);
+                                break;
+                            }
+                        }
+                        formDelegates.Add("EVENT_ATTACH=" + method.FullName + " => " + target + " => HANDLER=" + handler);
+                    }
                 }
             }
         }
